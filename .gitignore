@@ -1,0 +1,7 @@
+# Xcode build artifacts
+build/
+DerivedData/
+xcuserdata/
+
+# SwiftPM
+.build/
