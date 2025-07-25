@@ -11,7 +11,7 @@ import SwiftUI
 struct Slip_FiApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            MainTabView()
         }
     }
 }
