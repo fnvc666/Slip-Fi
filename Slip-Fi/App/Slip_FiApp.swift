@@ -61,7 +61,7 @@ enum Secrets {
         return dict
     }()
     
-    private static func value(for key: String) -> String {
+    static func value(for key: String) -> String {
         guard let value = values[key] as? String else {
             fatalError("Missing key: \(key) in Secrets.plist")
         }
