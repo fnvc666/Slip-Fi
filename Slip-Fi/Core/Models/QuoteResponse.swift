@@ -18,10 +18,7 @@ struct QuoteResponse: Decodable {
 }
 
 extension QuoteResponse {
-    func inWei(fallback: String) -> String {
-        fromTokenAmount ?? fallback
-    }
-
+    var inWei: String { fromTokenAmount ?? "0" }
     var outWei: String { toAmount ?? "0" }
 
     var inDecimals: Int  { fromToken?.decimals ?? 6 }

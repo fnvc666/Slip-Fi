@@ -8,22 +8,49 @@ import SwiftUI
 
 struct SwapView: View {
     @StateObject private var vm = SwapViewModel()
-    
+    @State private var maticText = "0.05"
+
     var body: some View {
         VStack(spacing: 12) {
             if let q = vm.quote {
-                Text("From \(formatAmount(weiString: q.inWei(fallback: vm.lastAmountWei), decimals: q.inDecimals)) \(q.inSymbol)")
+                Text("From \(formatAmount(weiString: q.inWei, decimals: q.inDecimals)) \(q.inSymbol)")
                 Text("To   \(formatAmount(weiString: q.outWei, decimals: q.outDecimals)) \(q.outSymbol)")
-            } else {
-                Text("Press the button to get a live quote")
             }
-            
+
             Button("Get Quote (USDC→WETH, 1 USDC)") {
                 vm.getQuoteUSDCtoWETH(amountUSDC: 1)
             }
+            .buttonStyle(.bordered)
+
+            Divider().padding(.vertical, 8)
+
+            // D2: ввод и своп
+            HStack {
+                Text("MATIC → USDC"); Spacer()
+            }
+            TextField("Amount (MATIC)", text: $maticText)
+                .keyboardType(.decimalPad)
+                .textFieldStyle(.roundedBorder)
+
+            Button {
+                let amt = Decimal(string: maticText) ?? 0
+                vm.swapMaticToUsdc(amountMatic: amt)
+            } label: {
+                if vm.isBuilding || vm.isSending { ProgressView() }
+                else { Text("Swap Now") }
+            }
             .buttonStyle(.borderedProminent)
+            .disabled(vm.isBuilding || vm.isSending)
+
+            if let hash = vm.txHash {
+                Text("Tx: \(hash)").font(.footnote).lineLimit(1).truncationMode(.middle)
+                Link("Open in Polygonscan", destination: URL(string: "https://polygonscan.com/tx/\(hash)")!)
+            }
+
+            if let err = vm.error { Text(err).foregroundColor(.red) }
+            Spacer()
         }
         .padding()
-        .alert("Error", isPresented: .constant(vm.error != nil), actions: { Button("OK"){ vm.error = nil }}, message: { Text(vm.error ?? "") })
     }
 }
+

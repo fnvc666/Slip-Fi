@@ -42,6 +42,16 @@ final class OneInchHTTPClient {
             throw NSError(domain: "oneinch", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"])
         }
 
+#if DEBUG
+print("GET \(comp.url!.absoluteString) → \(http.statusCode)")
+print(String(data: data.prefix(1200), encoding: .utf8) ?? "<non-utf8>")
+#endif
+
+#if DEBUG
+print("RAW JSON:")
+print(String(data: data, encoding: .utf8) ?? "<invalid>")
+#endif
+
         return try JSONDecoder().decode(T.self, from: data)
     }
 }
