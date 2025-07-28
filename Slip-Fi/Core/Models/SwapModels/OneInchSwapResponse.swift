@@ -6,6 +6,6 @@
 //
 
 struct OneInchSwapResponse: Decodable {
-    let toAmount: String
-    let tx: OneInchSwapTx
+    let dstAmount: String
+    let tx: OneInchSwapTx?
 }

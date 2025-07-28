@@ -30,8 +30,7 @@ final class ApproveService: ApproveServiceProtocol {
         let path = "/swap/v6.0/\(chainId)/approve/transaction"
         let params = [
             "tokenAddress": tokenAddress,
-            "amount": amountWei,
-            "walletAddress": walletAddress
+            "amount": amountWei
         ]
         return try await client.get(path, q: params)
     }

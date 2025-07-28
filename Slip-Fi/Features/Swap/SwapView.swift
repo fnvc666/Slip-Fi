@@ -9,7 +9,7 @@ import SwiftUI
 struct SwapView: View {
     @StateObject private var vm = SwapViewModel()
     @State private var maticText = "0.05"
-    @State private var usdcText = "1.0"
+    @State private var usdcText = "2.0"
 
     var body: some View {
         VStack(spacing: 12) {
@@ -66,6 +66,7 @@ struct SwapView: View {
 
                 Button {
                     let amt = Decimal(string: usdcText) ?? 0
+                    print("✅USDC→WETH: \(amt)")
                     vm.executeSwapUSDCtoWETH(amount: amt)
                 } label: {
                     if vm.isLoading {

@@ -75,6 +75,30 @@ final class TxSender {
             }
         }
     }
+    
+    func waitForTransactionConfirmation(txHash: String, interval: TimeInterval = 4.0, maxAttempts: Int = 30) async throws {
+        let urlPrefix = "https://api.polygonscan.com/api"
+        let apiKey = Secrets.oneInchKey
+
+        for _ in 0..<maxAttempts {
+            guard let url = URL(string: "\(urlPrefix)?module=transaction&action=gettxreceiptstatus&txhash=\(txHash)&apikey=\(apiKey)") else {
+                throw NSError(domain: "wait", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid Polygonscan URL"])
+            }
+
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let status = (json?["result"] as? [String: String])?["status"]
+
+            if status == "1" {
+                return
+            }
+
+            try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+        }
+
+        throw NSError(domain: "wait", code: -1, userInfo: [NSLocalizedDescriptionKey: "Timeout while waiting for tx confirmation"])
+    }
+
 }
 
 // MARK: - HEX utils
