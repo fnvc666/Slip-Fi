@@ -16,7 +16,7 @@ struct QuoteResponse: Decodable {
 //    let estimatedGas: Int?
     let dstAmount: String
 
-        var inWei: String { "1000000" } // ты знаешь, сколько передаешь
+        var inWei: String { "1000000" }
         var outWei: String { dstAmount }
         var inDecimals: Int { 6 }
         var outDecimals: Int { 18 }

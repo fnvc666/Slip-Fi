@@ -79,6 +79,64 @@ struct SwapView: View {
                 .disabled(vm.isLoading)
             }
 
+            Divider().padding(.vertical, 8)
+            // D4: Split USDC → WETH (just stub)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Split USDC → WETH")
+                    .font(.headline)
+                Button("Рассчитать лучшие N") {
+                    let amt = Decimal(string: usdcText) ?? 0
+                    vm.simulateSplitQuotes(from: Tokens.usdcNative, to: Tokens.weth, amount: amt, maxParts: 5)
+                }
+                .buttonStyle(.bordered)
+                
+                if !vm.splitResults.isEmpty {
+                    // results
+                    ForEach(vm.splitResults, id: \.parts) { res in
+                        HStack {
+                            Text("\(res.parts)x")
+                            Spacer()
+                            Text(String(format: "%.4f %@",
+                                        NSDecimalNumber(decimal: res.totalToTokenAmount).doubleValue,
+                                        "WETH"))
+
+                            let diff = res.deltaVsOnePart
+                            Text(diff >= 0
+                                 ? "+\(NSDecimalNumber(decimal: diff).doubleValue) WETH"
+                                 : "\(NSDecimalNumber(decimal: diff).doubleValue) WETH")
+                                .foregroundColor(diff >= 0 ? .green : .red)
+                        }
+                        .font(res.parts == (vm.bestSplit?.parts ?? -1) ? .headline : .body)
+                    }
+
+                    HStack {
+                        Text("Выбранные части: \(vm.selectedParts)")
+                        Slider(
+                            value: Binding(
+                                get: { Double(vm.selectedParts) },
+                                set: { vm.selectedParts = Int($0) }
+                            ),
+                            in: 1...5,
+                            step: 1
+                        )
+                        .disabled(!vm.forceSplitEvenIfLoss && vm.bestSplit?.parts == 1)
+                    }
+
+                    Toggle("Force split even if loss", isOn: $vm.forceSplitEvenIfLoss)
+                    Button("Swap with Split") {
+                        let amt = Decimal(string: usdcText) ?? 0
+                        if vm.selectedParts <= 1 || (!vm.forceSplitEvenIfLoss && vm.bestSplit?.parts == 1) {
+                            vm.executeSwapUSDCtoWETH(amount: amt)
+                        } else {
+                            vm.executeSwapUSDCtoWETH(amount: amt)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(vm.isLoading)
+                }
+            }
+
+            
             if let hash = vm.txHash {
                 Text("Tx: \(hash)").font(.footnote).lineLimit(1).truncationMode(.middle)
                 Link("Open in Polygonscan", destination: URL(string: "https://polygonscan.com/tx/\(hash)")!)

@@ -4,9 +4,7 @@
 //
 //  Created by Pavel Pavel on 25/07/2025.
 //
-import SwiftUI
-import ReownAppKit
-
+import Foundation
 import SwiftUI
 import ReownAppKit
 
@@ -19,6 +17,11 @@ final class SwapViewModel: ObservableObject {
     @Published var txHash: String?
     @Published var isBuilding = false
     @Published var isSending = false
+    @Published var splitResults: [SplitResult] = []
+    @Published var bestSplit: SplitResult? = nil
+    @Published var selectedParts: Int = 1  // as default N
+    @Published var forceSplitEvenIfLoss: Bool = false
+
 
     private let quoteService: QuoteService = OneInchQuoteService()
     private let swapService: SwapService = OneInchSwapService()
@@ -110,6 +113,97 @@ final class SwapViewModel: ObservableObject {
             }
         }
     }
+    
+    // D4 slip-algorithm
+    func simulateSplitQuotes(from fromToken: String,
+                             to toToken: String,
+                             amount: Decimal,
+                             maxParts: Int) {
+        Task { [weak self] in
+            guard let self else { return }
+            guard amount > 0, maxParts >= 1 else { return }
+
+            self.isLoading = true
+            defer { self.isLoading = false }
+
+            do {
+                let fromDecimals = 6
+                let toDecimals = 18
+
+                let totalWeiStr = toBaseUnitsString(amount, decimals: fromDecimals)
+                var results: [SplitResult] = []
+
+                for n in 1...maxParts {
+                    let partWeiList = splitWei(totalWeiStr, parts: n)
+                    var sumOutWei: Decimal = 0
+
+                    for partWei in partWeiList {
+                        let q = try await self.quoteService.quote(
+                            from: fromToken,
+                            to: toToken,
+                            amountWei: partWei,
+                            chain: MyChainPresets.polygon
+                        )
+                        if let dst = Decimal(string: q.dstAmount) {
+                            sumOutWei += dst
+                        }
+                    }
+
+                    let totalOut = sumOutWei / pow10(toDecimals)
+                    results.append(.init(parts: n,
+                                         totalToTokenAmount: totalOut,
+                                         deltaVsOnePart: 0))
+                }
+
+                if let base = results.first?.totalToTokenAmount {
+                    for i in results.indices {
+                        results[i].deltaVsOnePart = results[i].totalToTokenAmount - base
+                    }
+                }
+
+                let best = results.max(by: { $0.totalToTokenAmount < $1.totalToTokenAmount })
+                await MainActor.run {
+                    self.splitResults = results
+                    self.bestSplit = best
+                    self.selectedParts = best?.parts ?? 1
+                }
+
+            } catch {
+                await MainActor.run { self.error = error.localizedDescription }
+            }
+        }
+    }
+
+    private func pow10(_ n: Int) -> Decimal {
+        var r = Decimal(1)
+        for _ in 0..<n { r *= 10 }
+        return r
+    }
+
+    func toBaseUnitsString(_ amount: Decimal, decimals: Int) -> String {
+        let scaled = NSDecimalNumber(decimal: amount * pow10(decimals))
+        let handler = NSDecimalNumberHandler(
+            roundingMode: .down, scale: 0,
+            raiseOnExactness: false, raiseOnOverflow: false,
+            raiseOnUnderflow: false, raiseOnDivideByZero: false
+        )
+        return scaled.rounding(accordingToBehavior: handler).stringValue
+    }
+
+    func splitWei(_ totalWeiStr: String, parts: Int) -> [String] {
+        guard let total = UInt64(totalWeiStr), parts > 0 else { return [] }
+        let base = total / UInt64(parts)
+        let rem  = total % UInt64(parts)
+        var out: [String] = []
+        out.reserveCapacity(parts)
+        for i in 0..<parts {
+            let add = i < rem ? 1 : 0
+            out.append(String(base + UInt64(add)))
+        }
+        return out
+    }
+
+
 
     // MARK: - HELPERS
 
@@ -182,4 +276,6 @@ enum Tokens {
     static let usdcNative = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
     static let weth = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
     static let nativeMatic = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
+    
+    static let wethDecimals = 18
 }
