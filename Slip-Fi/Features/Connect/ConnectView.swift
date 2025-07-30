@@ -11,24 +11,62 @@ struct ConnectView: View {
     @EnvironmentObject var session: SessionStore
     
     var body: some View {
-        VStack {
-            Text("Optimize your swaps on Polygon using 1inch APIs")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            
-            Button {
-                AppKit.present()
-            } label: {
-                Text("Connect Wallet")
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .overlay(
-                        Capsule()
-                            .stroke(Color.blue, lineWidth: 1)
-                    )
+        ZStack {
+            Image("connectBackground")
+                .resizable()
+                .scaledToFill()
+                .ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 30) {
+                
+                HStack {
+                    Text("Slip-Fi")
+                        .font(.system(size: 48, weight: .regular))
+                        .foregroundStyle(.white)
+                    
+                    Spacer()
+                }
+                .padding(25)
+                
+                Spacer()
+                
+                Text("Welcome to Slip-Fi — optimize your\n swaps")
+                    .font(.system(size: 20, weight: .thin))
+                    .foregroundStyle(Color(red: 0.82, green: 0.88, blue: 0.87))
+                    .multilineTextAlignment(.leading)
+                
+                Button {
+                    AppKit.present()
+                } label: {
+                    HStack {
+                        Text("Connect Wallet")
+                            .font(.system(size: 18, weight: .regular))
+                            .foregroundStyle(.black)
+                        Spacer()
+                        
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.black)
+                    }
+                    .padding(.horizontal)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                
+                HStack() {
+                    Spacer()
+                    Text("Powered by Pavel Sivak & 1inch API's")
+                        .font(.system(size: 12, weight: .thin))
+                        .foregroundStyle(.white.opacity(0.3))
+                    Spacer()
+                }
+                
+                .padding(.bottom, 25)
+                
             }
+            .padding(.horizontal, 25)
         }
-        .padding(.horizontal)
     }
 }
 
