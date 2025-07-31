@@ -135,7 +135,7 @@ final class TxSender {
             }
         }
     
-    func waitForTransactionConfirmation(txHash: String, interval: TimeInterval = 4.0, maxAttempts: Int = 30) async throws {
+    func waitForTransactionConfirmation(txHash: String, interval: TimeInterval = 4.0, maxAttempts: Int = 40) async throws {
         let urlPrefix = "https://api.polygonscan.com/api"
         let apiKey = Secrets.oneInchKey
 
@@ -152,7 +152,7 @@ final class TxSender {
                 return
             }
 
-            try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000)) // 4 seconds * 40 attempts = 160 seconds
         }
 
         throw NSError(domain: "wait", code: -1, userInfo: [NSLocalizedDescriptionKey: "Timeout while waiting for tx confirmation"])

@@ -10,7 +10,12 @@ struct SwapView: View {
     @StateObject private var vm: SwapViewModel
     @State private var maticText = "0.05"
     @State private var usdcText = "2.0"
+    @State private var showSplitTable = false
     @FocusState private var focusedField: FocusedField?
+    
+    @State private var testEth = "0"
+    
+    private var accountAddress: String = UserDefaults.standard.string(forKey: "accountAddress") ?? "0x111111125421cA6dc452d289314280a0f8842A65"
     
     enum FocusedField: Hashable {
         case matic, usdc
@@ -27,255 +32,294 @@ struct SwapView: View {
     }
     
     var body: some View {
-        VStack(spacing: 12) {
+        ZStack {
+            Image("swapBackground")
+                .resizable()
+                .scaledToFill()
+                .ignoresSafeArea()
             
-            if let q = vm.quote {
-                Text("From \(formatAmount(weiString: q.inWei, decimals: q.inDecimals)) \(q.inSymbol)")
-                Text("To   \(formatAmount(weiString: q.outWei, decimals: q.outDecimals)) \(q.outSymbol)")
-            }
-            
-            Button("Get Quote (USDC→WETH, 1 USDC)") {
-                vm.getQuoteUSDCtoWETH(amountUSDC: 1)
-            }
-            .buttonStyle(.bordered)
-            
-            Divider().padding(.vertical, 8)
-            
-            // D2: MATIC → USDC
-            VStack(spacing: 8) {
-                HStack {
-                    Text("MATIC → USDC")
-                    Spacer()
-                }
-                
-                TextField("Amount (MATIC)", text: $maticText)
-                    .keyboardType(.decimalPad)
-                    .focused($focusedField, equals: .matic)
-                    .textFieldStyle(.roundedBorder)
-                
-                Button {
-                    let amt = Decimal(string: maticText) ?? 0
-                    vm.swapMaticToUsdc(amountMatic: amt)
-                } label: {
-                    if vm.isBuilding || vm.isSending {
-                        ProgressView()
-                    } else {
-                        Text("Swap MATIC→USDC")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(vm.isBuilding || vm.isSending)
-            }
-            
-            Divider().padding(.vertical, 8)
-            
-            // D3: USDC → WETH (approve → swap)
-            VStack(spacing: 8) {
-                HStack {
-                    Text("USDC → WETH")
-                    Spacer()
-                }
-                
-                TextField("Amount (USDC)", text: $usdcText)
-                    .keyboardType(.decimalPad)
-                    .focused($focusedField, equals: .usdc)
-                    .textFieldStyle(.roundedBorder)
-                
-                Button {
-                    let amt = Decimal(string: usdcText) ?? 0
-                    print("USDC→WETH: \(amt)")
-                    vm.executeSwapUSDCtoWETH(amount: amt)
-                } label: {
-                    if vm.isLoading {
-                        ProgressView()
-                    } else {
-                        Text("Swap USDC→WETH")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(vm.isLoading)
-            }
-            
-            Divider().padding(.vertical, 8)
-            // D4: Split USDC → WETH (just stub)
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Split options")
-                    Spacer()
-                }
-//                Stepper("Parts: \(vm.selectedParts)", value: $vm.selectedParts, in: 1...5, step: 1)
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Split USDC → WETH").font(.headline)
-
-                    Button("Рассчитать лучшие N") {
-                        let amt = Decimal(string: usdcText) ?? 0
-                        vm.simulateSplitQuotes(from: Tokens.usdcNative, to: Tokens.weth, amount: amt, maxParts: 5)
-                    }
-                    .buttonStyle(.bordered)
-
-                    if !vm.splitResults.isEmpty {
-                        ForEach(vm.splitResults, id: \.parts) { res in
-                            HStack {
-                                Text("\(res.parts)x")
-                                Spacer()
-                                Text(String(format: "%.6f WETH",
-                                            NSDecimalNumber(decimal: res.totalToTokenAmount).doubleValue))
-                                let diff = res.deltaVsOnePart
-                                let pct  = (res.totalToTokenAmount == 0 || vm.splitResults.first?.totalToTokenAmount == 0)
-                                           ? 0.0
-                                           : (NSDecimalNumber(decimal: diff).doubleValue /
-                                              NSDecimalNumber(decimal: vm.splitResults.first!.totalToTokenAmount).doubleValue * 100.0)
-                                Text(diff >= 0
-                                     ? String(format: "+%.6f WETH (%.3f%%)", diff.doubleValue, pct)
-                                     : String(format: "%.6f WETH (%.3f%%)", diff.doubleValue, pct))
-                                .foregroundColor(diff >= 0 ? .green : .red)
-                            }
-                            .font(res.parts == (vm.bestSplit?.parts ?? -1) ? .headline : .body)
-                        }
-
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    // header
+                    HStack {
+                        Text("Slip-Fi")
+                            .font(.system(size: 32, weight: .light))
+                            .foregroundStyle(.white)
+                        
+                        Spacer()
+                        
                         HStack {
-                            Text("Selected parts: \(vm.selectedParts)")
-                            Slider(value: Binding(
-                                get: { Double(vm.selectedParts) },
-                                set: { vm.selectedParts = Int($0) }
-                            ), in: 1...5, step: 1)
-                        }
-                        Toggle("Force split even if loss", isOn: $vm.forceSplitEvenIfLoss)
-                    }
-                }
-
-                
-                
-                Button("Swap with Split") {
-                    let amt = Decimal(string: usdcText) ?? 0
-                    if vm.selectedParts <= 1 {
-                        vm.executeSwapUSDCtoWETH(amount: amt)
-                    } else {
-                        vm.startSplitSwapUSDCtoWETH(
-                            totalAmount: amt,
-                            parts: vm.selectedParts,
-                            slippageBps: 100
-                        )
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(vm.isLoading || vm.isSplitRunning)
-                
-                if vm.isSplitRunning {
-                    if let t = vm.splitProgressText { Text(t).font(.footnote) }
-                    ProgressView(value: Double(vm.splitCurrent), total: Double(max(vm.splitTotal, 1)))
-                        .progressViewStyle(.linear)
-                    Button(role: .destructive) { vm.cancelSplit() } label: { Text("Stop") }
-                }
-                
-                if !vm.splitHashes.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Split tx hashes:")
-                            .font(.subheadline).bold()
-                        ForEach(vm.splitHashes, id: \.self) { h in
-                            HStack {
-                                Text(h).font(.footnote).lineLimit(1).truncationMode(.middle)
-                                Spacer()
-                                Link("View", destination: URL(string: "https://polygonscan.com/tx/\(h)")!)
+                            Text(accountAddress)
+                                .truncationMode(.middle)
+                                .font(.system(size: 15, weight: .thin))
+                                .foregroundStyle(Color(red: 0.98, green: 0.98, blue: 0.98).opacity(0.5))
+                                .frame(width: 90, height: 18)
+                            
+                            Button {
+                                UIPasteboard.general.string = accountAddress
+                            } label: {
+                                Image(systemName: "square.on.square")
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(.white)
                             }
                         }
                     }
-                }
-
+                    
+                    Text("Transaction")
+                        .font(.system(size: 26, weight: .light))
+                        .foregroundStyle(.white)
+                        .padding(.top, 16)
+                    
+                    // Pay & Receive
+                    ZStack {
+                        VStack(spacing: 16) {
+                            SwapBox(amount: $usdcText, backgroundImage: "youPayBackground", option: "You pay", balance: "5.33", token: "USDC", tokenImage: "usdc")
+                            
+                            SwapBox(amount: $testEth, backgroundImage: "youReceiveBackground", option: "You Receive", balance: "0.12", token: "WETH", tokenImage: "weth")
+                        }
+                        
+                        Button {
+                            //
+                        } label: {
+                            Image(systemName: "arrow.up.arrow.down")
+                                .font(.system(size: 19))
+                                .foregroundStyle(.black)
+                                .frame(width: 35, height: 35)
+                                .padding(4)
+                                .background(.white)
+                                .clipShape(Circle())
+                        }
+                    }
+                    
+                    SplitStack(vm: vm, usdcAmount: usdcText)
+                    
+                    if vm.splitResults.isEmpty {
+                        Button {
+                            showSplitTable = true
+                            let amt = Decimal(string: usdcText) ?? 0
+                            vm.simulateSplitQuotes(from: Tokens.usdcNative, to: Tokens.weth, amount: amt, maxParts: 5)
+                        } label: {
+                            HStack {
+                                Spacer()
+                                
+                                if vm.isLoading {
+                                    ProgressView()
+                                } else {
+                                    Text("Swap")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundStyle(Color(red: 0.05, green: 0.13, blue: 0.2))
+                                }
+                                
+                                Spacer()
+                            }
+                        }
+                        .padding(.vertical, 12)
+                        .background(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .padding(.top, 8)
+                    }
+                    
+                    
+                    Spacer()
+                }            .padding(.horizontal, 15)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        print("tapped")
+                        focusedField = nil
+                    }
+                    .padding()
             }
-            //            Button("Swap with Split") {
-            //                let amt = Decimal(string: usdcText) ?? 0
-            //                if vm.selectedParts <= 1 || (!vm.forceSplitEvenIfLoss && vm.bestSplit?.parts == 1) {
-            //                    vm.executeSwapUSDCtoWETH(amount: amt) // обычный своп
-            //                } else {
-            //                    vm.startSplitSwapUSDCtoWETH(totalAmount: amt, parts: vm.selectedParts, slippageBps: 100)
-            //                }
-            //            }
-            //            .disabled(vm.isLoading || vm.isSplitRunning)
-            //
-            //            if vm.isSplitRunning {
-            //                if let t = vm.splitProgressText { Text(t).font(.footnote) }
-            //                ProgressView(value: Double(vm.splitCurrent), total: Double(vm.splitTotal))
-            //                    .progressViewStyle(.linear)
-            //                Button(role: .destructive) { vm.cancelSplit() } label: { Text("Stop") }
-            //            }
-            
-            //            VStack(alignment: .leading, spacing: 8) {
-            //                Text("Split USDC → WETH")
-            //                    .font(.headline)
-            //                Button("Рассчитать лучшие N") {
-            //                    let amt = Decimal(string: usdcText) ?? 0
-            //                    vm.simulateSplitQuotes(from: Tokens.usdcNative, to: Tokens.weth, amount: amt, maxParts: 5)
-            //                }
-            //                .buttonStyle(.bordered)
-            //
-            //                if !vm.splitResults.isEmpty {
-            //                    // results
-            //                    ForEach(vm.splitResults, id: \.parts) { res in
-            //                        HStack {
-            //                            Text("\(res.parts)x")
-            //                            Spacer()
-            //                            Text(String(format: "%.4f %@",
-            //                                        NSDecimalNumber(decimal: res.totalToTokenAmount).doubleValue,
-            //                                        "WETH"))
-            //
-            //                            let diff = res.deltaVsOnePart
-            //                            Text(diff >= 0
-            //                                 ? "+\(NSDecimalNumber(decimal: diff).doubleValue) WETH"
-            //                                 : "\(NSDecimalNumber(decimal: diff).doubleValue) WETH")
-            //                                .foregroundColor(diff >= 0 ? .green : .red)
-            //                        }
-            //                        .font(res.parts == (vm.bestSplit?.parts ?? -1) ? .headline : .body)
-            //                    }
-            //
-            //                    HStack {
-            //                        Text("Выбранные части: \(vm.selectedParts)")
-            //                        Slider(
-            //                            value: Binding(
-            //                                get: { Double(vm.selectedParts) },
-            //                                set: { vm.selectedParts = Int($0) }
-            //                            ),
-            //                            in: 1...5,
-            //                            step: 1
-            //                        )
-            //                        .disabled(!vm.forceSplitEvenIfLoss && vm.bestSplit?.parts == 1)
-            //                    }
-            //
-            //                    Toggle("Force split even if loss", isOn: $vm.forceSplitEvenIfLoss)
-            //                    Button("Swap with Split") {
-            //                        let amt = Decimal(string: usdcText) ?? 0
-            //                        if vm.selectedParts <= 1 || (!vm.forceSplitEvenIfLoss && vm.bestSplit?.parts == 1) {
-            //                            vm.executeSwapUSDCtoWETH(amount: amt)
-            //                        } else {
-            //                            vm.executeSwapUSDCtoWETH(amount: amt)
-            //                        }
-            //                    }
-            //                    .buttonStyle(.borderedProminent)
-            //                    .disabled(vm.isLoading)
-            //                }
-            //            }
-            
-            
-//            if let hash = vm.txHash {
-//                Text("Tx: \(hash)")
-//                    .font(.footnote)
-//                    .lineLimit(1)
-//                    .truncationMode(.middle)
-//                Link("Open in Polygonscan",
-//                     destination: URL(string: "https://polygonscan.com/tx/\(hash)")!)
-//            }
-            
-            if let err = vm.error { Text(err).foregroundColor(.red) }
-            
-            Spacer()
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            print("tapped")
-            focusedField = nil
-        }
-        .padding()
     }
 }
 
+#Preview {
+    SwapView()
+}
+
+struct SwapBox: View {
+    @Binding var amount: String
+    var backgroundImage: String
+    var option: String
+    var balance: String
+    var token: String
+    var tokenImage: String
+    var body: some View {
+        ZStack {
+            Image(backgroundImage)
+                .resizable()
+                .scaledToFill()
+            HStack {
+                VStack(alignment: .leading) {
+                    Text(option)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color(red: 0.74, green: 0.76, blue: 0.78))
+                    TextField("amount", text: $amount)
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.98, green: 0.98, blue: 0.98))
+                        .lineLimit(1)
+                        .frame(maxWidth: 200, alignment: .leading)
+                        .padding(.top, 5)
+                    
+                    Text("$\(balance)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color(red: 0.74, green: 0.76, blue: 0.78))
+                        .padding(.top, 15)
+                        .multilineTextAlignment(.leading)
+                }
+                
+                Spacer()
+                
+                VStack {
+                    Spacer()
+                    
+                    Button {
+                        
+                    } label: {
+                        HStack {
+                            Image(tokenImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 20, height: 20)
+                            Text(token)
+                                .font(.system(size: 14))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .frame(width: 110, height: 32)
+                    .background(.white.opacity(0.3))
+                    .clipShape(Capsule())
+                    
+                    Spacer()
+                }
+            }
+            .padding(.horizontal)
+        }
+        .frame(maxWidth: .infinity, maxHeight: 140)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+    }
+}
+
+struct SplitStack: View {
+    @ObservedObject var vm: SwapViewModel
+    var usdcAmount: String
+    var body: some View {
+        VStack {
+            if !vm.splitResults.isEmpty {
+                LazyVStack {
+                    ForEach(Array(vm.splitResults.enumerated()), id: \.element.parts) { index, res in
+                        SplitResultRow(vm: vm, result: res)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .font(res.parts == (vm.bestSplit?.parts ?? -1) ? .headline : .body)
+                        
+                        if index < vm.splitResults.count - 1 {
+                            Divider()
+                                .padding(.horizontal)
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 12)
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                
+                HStack {
+                    Text("Selected splits number")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Color(red: 0.98, green: 0.98, blue: 0.98))
+                    
+                    Spacer()
+                    
+                    HStack(spacing: 0) {
+                        ForEach(1..<6, id: \.self) { number in
+                            Button {
+                                vm.selectedParts = number
+                            } label: {
+                                Text("\(number)")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(number == vm.selectedParts ? .white : .white.opacity(0.1))
+                                    .foregroundColor(number == vm.selectedParts ? .black : .white)
+                            }
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .padding(.top, 24)
+                
+                HStack(spacing: 16) {
+                    
+                    Spacer()
+                    
+                    Button {
+                        let amt = Decimal(string: usdcAmount)
+                        vm.executeSwapUSDCtoWETH(amount: amt ?? 0)
+                    } label: {
+                        Text("Swap without Split")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.white.opacity(0.2))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    
+                    Button {
+                        let amt = Decimal(string: usdcAmount) ?? 0
+                        if vm.selectedParts <= 1 {
+                            vm.executeSwapUSDCtoWETH(amount: amt)
+                        } else {
+                            vm.startSplitSwapUSDCtoWETH(
+                                totalAmount: amt,
+                                parts: vm.selectedParts,
+                                slippageBps: 100
+                            )
+                        }
+                    } label: {
+                        Text("Swap with Split")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.black)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .padding(.top, 24)
+            }
+        }
+    }
+}
+
+struct SplitResultRow: View {
+    @ObservedObject var vm: SwapViewModel
+    var result: SplitResult
+    var body: some View {
+        HStack {
+            Text("\(result.parts) split")
+                .font(.system(size: 12))
+                .foregroundStyle(Color(red: 0.46, green: 0.5, blue: 0.52))
+            
+            Spacer()
+            
+            Text(String(format: "%.4f WETH",
+                        NSDecimalNumber(decimal: result.totalToTokenAmount).doubleValue))
+            .font(.system(size: 14))
+            .foregroundStyle(Color(red: 0.04, green: 0.07, blue: 0.09))
+            
+            let diff = result.deltaVsOnePart
+            let pct  = (result.totalToTokenAmount == 0 || vm.splitResults.first?.totalToTokenAmount == 0)
+            ? 0.0
+            : (NSDecimalNumber(decimal: diff).doubleValue /
+               NSDecimalNumber(decimal: vm.splitResults.first!.totalToTokenAmount).doubleValue * 100.0)
+            Text(diff >= 0
+                 ? String(format: "+%.4f WETH (%.3f%%)", diff.doubleValue, pct)
+                 : String(format: "%.4f WETH (%.3f%%)", diff.doubleValue, pct))
+            .multilineTextAlignment(.trailing)
+            .font(.system(size: 14))
+            .foregroundColor(diff >= 0 ? Color(red: 0.02, green: 0.68, blue: 0.57).opacity(0.8) : Color(red: 0.68, green: 0.02, blue: 0.03).opacity(0.8))
+        }
+    }
+}

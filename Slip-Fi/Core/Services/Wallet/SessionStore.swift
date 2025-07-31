@@ -20,6 +20,7 @@ final class SessionStore: ObservableObject {
         if let account = AppKit.instance.getAddress() {
             self.isConnected = true
             self.address = account
+            UserDefaults.standard.set(account, forKey: "accountAddress")
         }
         
         // settle session

@@ -401,7 +401,7 @@ extension Secrets {
 }
 
 enum Tokens {
-    static let usdcNative = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
+    static let usdcNative = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
     static let weth = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
     static let nativeMatic = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
     
