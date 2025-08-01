@@ -8,22 +8,30 @@
 import SwiftUI
 
 struct MainTabView: View {
+    @State private var selectedTab: Tab = .home
+
     var body: some View {
-        TabView {
-            Tab("Swap", systemImage: "house") {
-                SwapView()
+        ZStack {
+            switch selectedTab {
+                case .home:
+                    SwapView()
+                case .history:
+                    HistoryView()
+                case .settings:
+                    SettingsView()
             }
-            
-            Tab("History", systemImage: "pencil") {
-                SwapView()
+
+            VStack {
+                Spacer()
+                CustomTabBar(selectedTab: $selectedTab)
+                    .padding(.bottom, 24)
+                
             }
-            
-            Tab("Settings", systemImage: "gear") {
-                SettingsView()
-            }
+            .frame(maxWidth: 250)
         }
     }
 }
+
 
 #Preview {
     MainTabView()

@@ -73,13 +73,25 @@ struct SwapView: View {
                     // Pay & Receive
                     ZStack {
                         VStack(spacing: 16) {
-                            SwapBox(amount: $usdcText, backgroundImage: "youPayBackground", option: "You pay", balance: "5.33", token: "USDC", tokenImage: "usdc")
+                            SwapBox(
+                                amount: $vm.payText,
+                                backgroundImage: "youPayBackground",
+                                option: "You pay",
+                                balance: String(format: "%.2f", vm.isUsdcToWeth ? vm.usdcBalance.doubleValue : vm.wethBalance.doubleValue),
+                                token: vm.isUsdcToWeth ? "USDC" : "WETH",
+                                tokenImage: vm.isUsdcToWeth ? "usdc" : "weth")
                             
-                            SwapBox(amount: $testEth, backgroundImage: "youReceiveBackground", option: "You Receive", balance: "0.12", token: "WETH", tokenImage: "weth")
+                            SwapBox(
+                                amount: .constant(vm.quote == nil ? "" : formatAmount(weiString: vm.quote!.outWei, decimals: vm.isUsdcToWeth ? 18 : 6)),
+                                backgroundImage: "youReceiveBackground",
+                                option: "You Receive",
+                                balance: String(format: "%.2f", vm.isUsdcToWeth ? vm.wethBalance.doubleValue : vm.usdcBalance.doubleValue),
+                                token: vm.isUsdcToWeth ? "WETH" : "USDC",
+                                tokenImage: vm.isUsdcToWeth ? "weth" : "usdc")
                         }
                         
                         Button {
-                            //
+                            withAnimation { vm.switchDirection() }
                         } label: {
                             Image(systemName: "arrow.up.arrow.down")
                                 .font(.system(size: 19))
@@ -91,12 +103,12 @@ struct SwapView: View {
                         }
                     }
                     
-                    SplitStack(vm: vm, usdcAmount: usdcText)
+                    SplitStack(vm: vm, usdcAmount: vm.payText)
                     
                     if vm.splitResults.isEmpty {
                         Button {
                             showSplitTable = true
-                            let amt = Decimal(string: usdcText) ?? 0
+                            let amt = Decimal(string: vm.payText) ?? 0
                             vm.simulateSplitQuotes(from: Tokens.usdcNative, to: Tokens.weth, amount: amt, maxParts: 5)
                         } label: {
                             HStack {
@@ -121,15 +133,19 @@ struct SwapView: View {
                     
                     
                     Spacer()
-                }            .padding(.horizontal, 15)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        print("tapped")
-                        focusedField = nil
-                    }
-                    .padding()
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    print("tapped")
+                    focusedField = nil
+                }
+
+                .padding(.top, 15)
+                .padding(.bottom, 60)
             }
+            .padding(.horizontal, 45)
         }
+        .ignoresSafeArea(.keyboard)
     }
 }
 
@@ -140,6 +156,7 @@ struct SwapView: View {
 struct SwapBox: View {
     @Binding var amount: String
     var backgroundImage: String
+    var isLoading = false
     var option: String
     var balance: String
     var token: String

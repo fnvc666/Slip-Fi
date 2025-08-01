@@ -7,6 +7,7 @@
 import Foundation
 import SwiftUI
 import ReownAppKit
+import Combine
 
 @MainActor
 final class SwapViewModel: ObservableObject {
@@ -28,6 +29,11 @@ final class SwapViewModel: ObservableObject {
     @Published var splitHashes: [String] = []
     @Published var splitCancel = false
     
+    @Published var isQuoteLoading = false
+    @Published var usdcBalance: Decimal = 0
+    @Published var wethBalance: Decimal = 0
+    @Published var isUsdcToWeth = true
+    @Published var payText: String = ""
     
     private let splitService: SplitSwapServiceProtocol
     private let quoteService: QuoteService = OneInchQuoteService()
@@ -36,6 +42,15 @@ final class SwapViewModel: ObservableObject {
     
     init(splitService: SplitSwapServiceProtocol) {
         self.splitService = splitService
+
+        quoteCancellable = $payText
+            .debounce(for: .seconds(2), scheduler: RunLoop.main)
+            .sink { [weak self] txt in
+                guard let self, let d = Decimal(string: txt), d > 0 else { return }
+                self.requestQuote(amount: d)
+            }
+
+        updateBalances()
     }
     
     // D1 (quote)
@@ -145,7 +160,7 @@ final class SwapViewModel: ObservableObject {
                     walletAddress: wallet,
                     slippageBps: currentSlippageBps(),
                     waitForConfirmation: false,
-                    delayBetweenPartsMs: 0,
+                    delayBetweenPartsMs: 250,
                     progress: { done, total in
                         self.splitCurrent = done
                         self.splitTotal = total
@@ -219,6 +234,65 @@ final class SwapViewModel: ObservableObject {
     
     private func currentSlippageBps() -> Int { 100 }
     
+    // D5-6
+    
+    func updateBalances() {
+        Task {
+            guard let addr = AppKit.instance.getAddress() else { return }
+            do {
+                let usdcWei = try await ERC20BalanceService.balanceOfWei(
+                    token: Tokens.usdcNative,
+                    wallet: addr,
+                    rpcUrl: MyChainPresets.polygon.rpcUrl
+                )
+                let wethWei = try await ERC20BalanceService.balanceOfWei(
+                    token: Tokens.weth,
+                    wallet: addr,
+                    rpcUrl: MyChainPresets.polygon.rpcUrl
+                )
+                await MainActor.run {
+                    usdcBalance = usdcWei / pow10(6)
+                    wethBalance = wethWei / pow10(18)
+                }
+            } catch { print("balance error", error) }
+        }
+    }
+    
+    private var quoteCancellable: AnyCancellable?
+
+    func bindQuoteDebounce(payText: Published<String>.Publisher) {
+        quoteCancellable = payText
+            .debounce(for: .seconds(2), scheduler: RunLoop.main)
+            .sink { [weak self] txt in
+                guard let self, let d = Decimal(string: txt), d > 0 else { return }
+                self.requestQuote(amount: d)
+            }
+    }
+
+    private func requestQuote(amount: Decimal) {
+        Task { [self] in
+            isQuoteLoading = true
+            do {
+                let wei = toWei(amount, decimals: self.isUsdcToWeth ? 6 : 18)
+                self.quote = try await self.quoteService.quote(
+                    from: self.isUsdcToWeth ? Tokens.usdcNative : Tokens.weth,
+                    to:   isUsdcToWeth ? Tokens.weth : Tokens.usdcNative,
+                    amountWei: wei,
+                    chain: MyChainPresets.polygon
+                )
+            } catch { self.error = error.localizedDescription }
+            isQuoteLoading = false
+        }
+    }
+
+
+    func switchDirection() {
+        isUsdcToWeth.toggle()
+        quote = nil
+        splitResults.removeAll()
+        bestSplit = nil
+    }
+
     
     // D4 slip-algorithm
     //    func simulateSplitQuotes(from fromToken: String, to toToken: String, amount: Decimal, maxParts: Int) {

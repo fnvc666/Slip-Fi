@@ -79,10 +79,15 @@ final class SplitSwapService: SplitSwapServiceProtocol {
             let hash = try await txSender.send(tx: swapTx, userAddress: walletAddress)
             hashes.append(hash)
 
-            try? await txSender.waitForTransactionConfirmation(txHash: hash)
+            if waitForConfirmation {
+                try? await txSender.waitForTransactionConfirmation(txHash: hash)
+            }
 
             await MainActor.run { progress(idx + 1, parts) }
-            try? await Task.sleep(nanoseconds: DELAY_NS)
+
+            if delayBetweenPartsMs > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delayBetweenPartsMs) * 1_000_000)
+            }
         }
         return hashes
     }
