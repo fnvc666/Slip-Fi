@@ -76,18 +76,23 @@ struct SwapView: View {
                             SwapBox(
                                 amount: $vm.payText,
                                 backgroundImage: "youPayBackground",
+                                isLoading: vm.isQuoteLoadingPay,
                                 option: "You pay",
                                 balance: String(format: "%.2f", vm.isUsdcToWeth ? vm.usdcBalance.doubleValue : vm.wethBalance.doubleValue),
                                 token: vm.isUsdcToWeth ? "USDC" : "WETH",
-                                tokenImage: vm.isUsdcToWeth ? "usdc" : "weth")
-                            
+                                tokenImage: vm.isUsdcToWeth ? "usdc" : "weth"
+                            )
+
                             SwapBox(
-                                amount: .constant(vm.quote == nil ? "" : formatAmount(weiString: vm.quote!.outWei, decimals: vm.isUsdcToWeth ? 18 : 6)),
+                                amount: $vm.receiveText,
                                 backgroundImage: "youReceiveBackground",
+                                isLoading: vm.isQuoteLoadingReceive,
                                 option: "You Receive",
                                 balance: String(format: "%.2f", vm.isUsdcToWeth ? vm.wethBalance.doubleValue : vm.usdcBalance.doubleValue),
                                 token: vm.isUsdcToWeth ? "WETH" : "USDC",
-                                tokenImage: vm.isUsdcToWeth ? "weth" : "usdc")
+                                tokenImage: vm.isUsdcToWeth ? "weth" : "usdc"
+                            )
+
                         }
                         
                         Button {
@@ -105,7 +110,25 @@ struct SwapView: View {
                     
                     SplitStack(vm: vm, usdcAmount: vm.payText)
                     
-                    if vm.splitResults.isEmpty {
+                    if let text = vm.successBanner, !vm.split.hashes.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(text)
+                                .font(.system(size: 14))
+                                .foregroundStyle(.white)
+                            ForEach(vm.split.hashes, id: \.self) { hash in
+                                if let url = URL(string: "https://polygonscan.com/tx/\(hash)") {
+                                    Link("Tx: \(hash.prefix(10))…", destination: url)
+                                        .font(.system(size: 14, weight: .medium))
+                                } else {
+                                    Text("Tx: \(hash)")
+                                        .font(.system(size: 14, weight: .medium))
+                                }
+                            }
+                        }
+                        .padding(.top, 16)
+                    }
+                    
+                    if vm.split.hashes.isEmpty {
                         Button {
                             showSplitTable = true
                             let amt = Decimal(string: vm.payText) ?? 0
@@ -143,9 +166,8 @@ struct SwapView: View {
                 .padding(.top, 15)
                 .padding(.bottom, 60)
             }
-            .padding(.horizontal, 45)
+            .padding(.horizontal, 30)
         }
-        .ignoresSafeArea(.keyboard)
     }
 }
 
@@ -171,12 +193,19 @@ struct SwapBox: View {
                     Text(option)
                         .font(.system(size: 14))
                         .foregroundStyle(Color(red: 0.74, green: 0.76, blue: 0.78))
-                    TextField("amount", text: $amount)
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.98, green: 0.98, blue: 0.98))
-                        .lineLimit(1)
-                        .frame(maxWidth: 200, alignment: .leading)
-                        .padding(.top, 5)
+                    
+                    if isLoading {
+                        ProgressView()
+                            .frame(height: 30)
+                                                        .padding(.top, 5)
+                    } else {
+                        TextField("amount", text: $amount)
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.98, green: 0.98, blue: 0.98))
+                            .lineLimit(1)
+                            .frame(maxWidth: 200, alignment: .leading)
+                            .padding(.top, 5)
+                    }
                     
                     Text("$\(balance)")
                         .font(.system(size: 12, weight: .medium))
@@ -222,15 +251,15 @@ struct SplitStack: View {
     var usdcAmount: String
     var body: some View {
         VStack {
-            if !vm.splitResults.isEmpty {
+            if !vm.split.results.isEmpty {
                 LazyVStack {
-                    ForEach(Array(vm.splitResults.enumerated()), id: \.element.parts) { index, res in
+                    ForEach(Array(vm.split.results.enumerated()), id: \.element.parts) { index, res in
                         SplitResultRow(vm: vm, result: res)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 7)
-                            .font(res.parts == (vm.bestSplit?.parts ?? -1) ? .headline : .body)
+                            .fontWeight(res.parts == (vm.split.best?.parts ?? -1) ? .bold : .regular)
                         
-                        if index < vm.splitResults.count - 1 {
+                        if index < vm.split.results.count - 1 {
                             Divider()
                                 .padding(.horizontal)
                         }
@@ -251,14 +280,14 @@ struct SplitStack: View {
                     HStack(spacing: 0) {
                         ForEach(1..<6, id: \.self) { number in
                             Button {
-                                vm.selectedParts = number
+                                vm.split.selectedParts = number
                             } label: {
                                 Text("\(number)")
                                     .font(.system(size: 14, weight: .medium))
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 6)
-                                    .background(number == vm.selectedParts ? .white : .white.opacity(0.1))
-                                    .foregroundColor(number == vm.selectedParts ? .black : .white)
+                                    .background(number == vm.split.selectedParts ? .white : .white.opacity(0.1))
+                                    .foregroundColor(number == vm.split.selectedParts ? .black : .white)
                             }
                         }
                     }
@@ -285,12 +314,12 @@ struct SplitStack: View {
                     
                     Button {
                         let amt = Decimal(string: usdcAmount) ?? 0
-                        if vm.selectedParts <= 1 {
+                        if vm.split.selectedParts <= 1 {
                             vm.executeSwapUSDCtoWETH(amount: amt)
                         } else {
                             vm.startSplitSwapUSDCtoWETH(
                                 totalAmount: amt,
-                                parts: vm.selectedParts,
+                                parts: vm.split.selectedParts,
                                 slippageBps: 100
                             )
                         }
@@ -327,10 +356,10 @@ struct SplitResultRow: View {
             .foregroundStyle(Color(red: 0.04, green: 0.07, blue: 0.09))
             
             let diff = result.deltaVsOnePart
-            let pct  = (result.totalToTokenAmount == 0 || vm.splitResults.first?.totalToTokenAmount == 0)
+            let pct  = (result.totalToTokenAmount == 0 || vm.split.results.first?.totalToTokenAmount == 0)
             ? 0.0
             : (NSDecimalNumber(decimal: diff).doubleValue /
-               NSDecimalNumber(decimal: vm.splitResults.first!.totalToTokenAmount).doubleValue * 100.0)
+               NSDecimalNumber(decimal: vm.split.results.first!.totalToTokenAmount).doubleValue * 100.0)
             Text(diff >= 0
                  ? String(format: "+%.4f WETH (%.3f%%)", diff.doubleValue, pct)
                  : String(format: "%.4f WETH (%.3f%%)", diff.doubleValue, pct))

@@ -11,27 +11,32 @@ struct MainTabView: View {
     @State private var selectedTab: Tab = .home
 
     var body: some View {
-        ZStack {
-            switch selectedTab {
-                case .home:
-                    SwapView()
-                case .history:
-                    HistoryView()
-                case .settings:
-                    SettingsView()
+        contentView
+            .safeAreaInset(edge: .bottom) {
+                HStack {
+                    Spacer(minLength: 0)
+                    CustomTabBar(selectedTab: $selectedTab)
+                        .frame(maxWidth: 250)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
             }
+            .animation(.easeInOut(duration: 0.2), value: selectedTab)
+    }
 
-            VStack {
-                Spacer()
-                CustomTabBar(selectedTab: $selectedTab)
-                    .padding(.bottom, 24)
-                
-            }
-            .frame(maxWidth: 250)
+    @ViewBuilder
+    private var contentView: some View {
+        switch selectedTab {
+        case .home:
+            SwapView()
+        case .history:
+            HistoryView()
+        case .settings:
+            SettingsView()
         }
     }
 }
-
 
 #Preview {
     MainTabView()

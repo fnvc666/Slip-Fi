@@ -9,8 +9,27 @@ import SwiftUI
 import ReownAppKit
 import Combine
 
+struct SplitState {
+    var results: [SplitResult] = []
+    var best: SplitResult? = nil
+    var selectedParts: Int = 1
+    var isRunning = false
+    var current = 0
+    var total = 0
+    var progressText: String? = nil
+    var hashes: [String] = []
+}
+
+
 @MainActor
 final class SwapViewModel: ObservableObject {
+
+    @Published var payText: String = ""
+    @Published var receiveText: String = ""
+
+    @Published var isQuoteLoadingPay = false
+    @Published var isQuoteLoadingReceive = false
+    
     @Published var isLoading = false
     @Published var error: String?
     @Published var quote: QuoteResponse?
@@ -18,22 +37,20 @@ final class SwapViewModel: ObservableObject {
     @Published var txHash: String?
     @Published var isBuilding = false
     @Published var isSending = false
-    @Published var splitResults: [SplitResult] = []
-    @Published var bestSplit: SplitResult? = nil
-    @Published var selectedParts: Int = 1  // as default N
-    @Published var forceSplitEvenIfLoss: Bool = false
-    @Published var isSplitRunning = false
-    @Published var splitCurrent = 0
-    @Published var splitTotal = 0
-    @Published var splitProgressText: String?
-    @Published var splitHashes: [String] = []
     @Published var splitCancel = false
     
     @Published var isQuoteLoading = false
     @Published var usdcBalance: Decimal = 0
     @Published var wethBalance: Decimal = 0
     @Published var isUsdcToWeth = true
-    @Published var payText: String = ""
+    
+    @Published var successBanner: String? = nil
+    
+    @Published var split = SplitState()
+    
+    
+    private var cancellables = Set<AnyCancellable>()
+    private var isProgrammaticUpdate = false
     
     private let splitService: SplitSwapServiceProtocol
     private let quoteService: QuoteService = OneInchQuoteService()
@@ -42,14 +59,51 @@ final class SwapViewModel: ObservableObject {
     
     init(splitService: SplitSwapServiceProtocol) {
         self.splitService = splitService
-
+        
         quoteCancellable = $payText
             .debounce(for: .seconds(2), scheduler: RunLoop.main)
             .sink { [weak self] txt in
                 guard let self, let d = Decimal(string: txt), d > 0 else { return }
                 self.requestQuote(amount: d)
             }
+        
+        $payText
+            .removeDuplicates()
+            .debounce(for: .milliseconds(600), scheduler: RunLoop.main)
+            .sink { [weak self] txt in
+                guard let self else { return }
+                guard !self.isProgrammaticUpdate else { return }     // не реагируем на свои же обновления
+                guard let d = Decimal(string: txt), d > 0 else {
+                    self.isProgrammaticUpdate = true
+                    self.receiveText = ""
+                    self.quote = nil
+                    self.isProgrammaticUpdate = false
+                    return
+                }
+                // Прямой расчёт: USDC -> WETH, считаем Receive
+                self.requestQuoteForward(usdcAmount: d)
+            }
+            .store(in: &cancellables)
 
+        $receiveText
+            .removeDuplicates()
+            .debounce(for: .milliseconds(600), scheduler: RunLoop.main)
+            .sink { [weak self] txt in
+                guard let self else { return }
+                guard !self.isProgrammaticUpdate else { return }
+                guard let d = Decimal(string: txt), d > 0 else {
+                    self.isProgrammaticUpdate = true
+                    self.payText = ""
+                    self.quote = nil
+                    self.isProgrammaticUpdate = false
+                    return
+                }
+                // Обратный расчёт: хотим X WETH -> считаем, сколько нужно USDC
+                self.requestQuoteReverse(wethAmount: d)
+            }
+            .store(in: &cancellables)
+
+        
         updateBalances()
     }
     
@@ -113,12 +167,20 @@ final class SwapViewModel: ObservableObject {
                 
                 if allowanceValue < required {
                     let approveTx = try await approveService.buildApproveTx(tokenAddress: Tokens.usdcNative, amountWei: amountWei, walletAddress: wallet)
-                    let hash = try await TxSender.shared.send(tx: approveTx.asOneInchSwapTx(), userAddress: wallet)
+                    let approveHash = try await TxSender.shared.send(tx: approveTx.asOneInchSwapTx(), userAddress: wallet)
                     
-                    try await waitForTransactionConfirmation(txHash: hash)
+                    
+                    try await waitForTransactionConfirmation(txHash: approveHash)
                     
                     allowance = try await approveService.getAllowance(tokenAddress: Tokens.usdcNative, walletAddress: wallet)
                     allowanceValue = Decimal(string: allowance) ?? 0
+                    
+                    self.split.hashes.removeAll()
+                    self.split.hashes.append(approveHash)
+                    self.successBanner = "✅ Approval отправлен. Следующая транзакция — swap."
+                    
+                    try await waitForTransactionConfirmation(txHash: approveHash)
+                    
                     
                     if allowanceValue < required {
                         self.error = "Allowance not updated after approval"
@@ -134,6 +196,25 @@ final class SwapViewModel: ObservableObject {
                 let swapHash = try await TxSender.shared.send(tx: tx, userAddress: wallet)
                 self.txHash = swapHash
                 
+                try await waitForTransactionConfirmation(txHash: swapHash)
+                await MainActor.run {
+                    self.updateBalances()
+                }
+                
+                self.split.hashes.removeAll()
+                self.split.hashes.append(swapHash)
+                self.successBanner = "Transactions approved."
+                
+                Task.detached { [weak self] in
+                    guard let self else { return }
+                    do {
+                        try await waitForTransactionConfirmation(txHash: swapHash)
+                        await MainActor.run { self.updateBalances() }
+                    } catch {
+                        //
+                    }
+                }
+                
             } catch {
                 self.error = error.localizedDescription
             }
@@ -145,12 +226,12 @@ final class SwapViewModel: ObservableObject {
         guard parts >= 1, totalAmount > 0 else { return }
         guard let wallet = AppKit.instance.getAddress() else { return }
         
-        isSplitRunning = true
+        split.isRunning = true
         splitCancel = false
-        splitCurrent = 0
-        splitTotal = parts
-        splitHashes = []
-        splitProgressText = "Preparing…"
+        split.current = 0
+        split.total = parts
+        split.hashes = []
+        split.progressText = "Preparing…"
         
         Task {
             do {
@@ -162,26 +243,33 @@ final class SwapViewModel: ObservableObject {
                     waitForConfirmation: false,
                     delayBetweenPartsMs: 250,
                     progress: { done, total in
-                        self.splitCurrent = done
-                        self.splitTotal = total
-                        self.splitProgressText = "Part \(done)/\(total)…"
+                        self.split.current = done
+                        self.split.total = total
+                        self.split.progressText = "Part \(done)/\(total)…"
                     },
                     shouldCancel: { [weak self] in self?.splitCancel == true }
                 )
                 await MainActor.run {
-                    self.splitHashes = hashes
-                    self.splitProgressText = "Ready: \(hashes.count)/\(parts)"
-                    //    self.appendSplitToHistory(totalAmount: totalAmount, parts: hashes.count, hashes: hashes)
+                    self.split.hashes = hashes
+                    self.successBanner = "✅ Отправлено \(hashes.count) транзакций split-swap. Баланс обновится после подтверждений."
+                }
+                if let last = hashes.last {
+                    Task.detached { [weak self] in
+                        do {
+                            try await waitForTransactionConfirmation(txHash: last)
+                            await MainActor.run { self?.updateBalances() }
+                        } catch { }
+                    }
                 }
             } catch {
                 await MainActor.run {
                     self.error = (error as? CancellationError) != nil
                     ? "Stopped by user"
                     : error.localizedDescription
-                    self.splitProgressText = "Error"
+                    self.split.progressText = "Error"
                 }
             }
-            await MainActor.run { self.isSplitRunning = false }
+            await MainActor.run { self.split.isRunning = false }
         }
     }
     
@@ -194,10 +282,10 @@ final class SwapViewModel: ObservableObject {
             do {
                 let fromDecimals = 6
                 let toDecimals = 18
-
+                
                 let totalWeiStr = toBaseUnitsString(amount, decimals: fromDecimals)
                 var results: [SplitResult] = []
-
+                
                 for n in 1...maxParts {
                     let partWeiList = splitWei(totalWeiStr, parts: n)
                     var sumOutWei: Decimal = 0
@@ -211,18 +299,18 @@ final class SwapViewModel: ObservableObject {
                     let totalOut = sumOutWei / pow10(toDecimals)
                     results.append(.init(parts: n, totalToTokenAmount: totalOut, deltaVsOnePart: 0))
                 }
-
+                
                 if let base = results.first?.totalToTokenAmount {
                     for i in results.indices {
                         results[i].deltaVsOnePart = results[i].totalToTokenAmount - base
                     }
                 }
-
+                
                 let best = results.max(by: { $0.totalToTokenAmount < $1.totalToTokenAmount })
                 await MainActor.run {
-                    self.splitResults = results
-                    self.bestSplit = best
-                    self.selectedParts = best?.parts ?? 1
+                    self.split.results = results
+                    self.split.best = best
+                    self.split.selectedParts = best?.parts ?? 1
                 }
             } catch {
                 await MainActor.run { self.error = error.localizedDescription }
@@ -259,7 +347,7 @@ final class SwapViewModel: ObservableObject {
     }
     
     private var quoteCancellable: AnyCancellable?
-
+    
     func bindQuoteDebounce(payText: Published<String>.Publisher) {
         quoteCancellable = payText
             .debounce(for: .seconds(2), scheduler: RunLoop.main)
@@ -268,7 +356,7 @@ final class SwapViewModel: ObservableObject {
                 self.requestQuote(amount: d)
             }
     }
-
+    
     private func requestQuote(amount: Decimal) {
         Task { [self] in
             isQuoteLoading = true
@@ -284,15 +372,76 @@ final class SwapViewModel: ObservableObject {
             isQuoteLoading = false
         }
     }
+    
+    private func requestQuoteForward(usdcAmount: Decimal) {
+        Task { [self] in
+            isQuoteLoadingReceive = true
+            defer { isQuoteLoadingReceive = false }
+            do {
+                let wei = toWei(usdcAmount, decimals: 6)
+                let q = try await quoteService.quote(
+                    from: Tokens.usdcNative, to: Tokens.weth,
+                    amountWei: wei, chain: MyChainPresets.polygon
+                )
+                let outWei = Decimal(string: q.dstAmount) ?? 0
+                let out = outWei / pow10(Tokens.wethDecimals)
 
+                await MainActor.run {
+                    self.quote = q
+                    self.isProgrammaticUpdate = true
+                    self.receiveText = NSDecimalNumber(decimal: out).stringValue
+                    self.isProgrammaticUpdate = false
+                }
+            } catch {
+                await MainActor.run { self.error = error.localizedDescription }
+            }
+        }
+    }
 
+    private func requestQuoteReverse(wethAmount: Decimal) {
+        Task { [self] in
+            isQuoteLoadingPay = true
+            defer { isQuoteLoadingPay = false }
+            do {
+                let wei = toWei(wethAmount, decimals: Tokens.wethDecimals)
+                let q = try await quoteService.quote(
+                    from: Tokens.weth, to: Tokens.usdcNative,
+                    amountWei: wei, chain: MyChainPresets.polygon
+                )
+                let usdcWei = Decimal(string: q.dstAmount) ?? 0
+                let usdc = usdcWei / pow10(6)
+
+                await MainActor.run {
+                    self.isProgrammaticUpdate = true
+                    self.payText = NSDecimalNumber(decimal: usdc).stringValue
+                    self.isProgrammaticUpdate = false
+                }
+                
+                await self.requestQuoteForward(usdcAmount: usdc)
+            } catch {
+                await MainActor.run { self.error = error.localizedDescription }
+            }
+        }
+    }
+
+    
+    
     func switchDirection() {
         isUsdcToWeth.toggle()
         quote = nil
-        splitResults.removeAll()
-        bestSplit = nil
+        split.results.removeAll()
+        split.best = nil
+
+        isProgrammaticUpdate = true
+        swap(&payText, &receiveText)
+        isProgrammaticUpdate = false
+
+        if let d = Decimal(string: payText), d > 0 {
+            requestQuoteForward(usdcAmount: d)
+        }
     }
 
+    
     
     // D4 slip-algorithm
     //    func simulateSplitQuotes(from fromToken: String, to toToken: String, amount: Decimal, maxParts: Int) {
@@ -406,10 +555,10 @@ func splitWei(_ totalWeiStr: String, parts: Int) -> [String] {
 }
 
 func pow10(_ n: Int) -> Decimal {
-        var r = Decimal(1)
-        for _ in 0..<n { r *= 10 }
-        return r
-    }
+    var r = Decimal(1)
+    for _ in 0..<n { r *= 10 }
+    return r
+}
 
 enum MyChainPresets {
     static let polygon = Chain(
