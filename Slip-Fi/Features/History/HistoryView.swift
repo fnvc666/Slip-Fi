@@ -24,6 +24,7 @@ struct HistoryView: View {
                     
                     ForEach(transactions, id: \.self) { trans in
                         TransactionBox(transaction: trans)
+                            .padding(.bottom, 20)
                     }
                     
                 }
@@ -130,11 +131,3 @@ struct TransactionBox: View {
         .frame(maxWidth: 360, maxHeight: 166)
     }
 }
-
-//#Preview {
-//    var transaction1 = TransactionModel(date: Date.now, fromToken: "USDC", fromAmount: 100, toToken: "WETH", toAmount: 0.0282024419, txArray: [
-//        "0x1d1fd6afdcd933d913516ef4a4606f63dc1c49c67f006e6173e8d6ad4801088a",
-//        "0xc82223184d99e4bdbdd935ec366b82e5016d93e4f8fa7b961a8b958765698a93",
-//        "0x1ff5d262c4d4baaf433570772bf7237e598fe24c52741b19d21ded5cc19ebd8c"])
-//    HistoryView(transactions: [transaction1])
-//}
