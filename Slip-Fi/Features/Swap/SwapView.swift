@@ -132,23 +132,23 @@ struct SwapView: View {
                         .padding(.top, 16)
                     }
                     
-                    if vm.split.hashes.isEmpty {
+                    if vm.split.results.isEmpty {
                         Button {
                             showSplitTable = true
                             let amt = Decimal(string: vm.payText) ?? 0
-                            vm.simulateSplitQuotes(from: Tokens.usdcNative, to: Tokens.weth, amount: amt, maxParts: 5)
+                            vm.simulateSplitQuotes(from: vm.isUsdcToWeth ? Tokens.usdcNative : Tokens.weth,
+                                                   to:   vm.isUsdcToWeth ? Tokens.weth : Tokens.usdcNative,
+                                                   amount: amt, maxParts: 5)
                         } label: {
                             HStack {
                                 Spacer()
-                                
                                 if vm.isLoading {
                                     ProgressView()
                                 } else {
-                                    Text("Swap")
+                                    Text("Calculate split options")
                                         .font(.system(size: 14, weight: .medium))
                                         .foregroundStyle(Color(red: 0.05, green: 0.13, blue: 0.2))
                                 }
-                                
                                 Spacer()
                             }
                         }
@@ -157,7 +157,6 @@ struct SwapView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .padding(.top, 8)
                     }
-                    
                     
                     Spacer()
                 }
@@ -304,8 +303,7 @@ struct SplitStack: View {
                     Spacer()
                     
                     Button {
-                        let amt = Decimal(string: usdcAmount)
-                        vm.executeSwapUSDCtoWETH(amount: amt ?? 0)
+                        vm.executeSwap()
                     } label: {
                         Text("Swap without Split")
                             .font(.system(size: 14, weight: .medium))
@@ -319,13 +317,9 @@ struct SplitStack: View {
                     Button {
                         let amt = Decimal(string: usdcAmount) ?? 0
                         if vm.split.selectedParts <= 1 {
-                            vm.executeSwapUSDCtoWETH(amount: amt)
+                            vm.executeSwap()
                         } else {
-                            vm.startSplitSwapUSDCtoWETH(
-                                totalAmount: amt,
-                                parts: vm.split.selectedParts,
-                                slippageBps: 100
-                            )
+                            vm.startSplitSwap(totalAmount: amt, parts: vm.split.selectedParts, slippageBps: 100)
                         }
                     } label: {
                         Text("Swap with Split")

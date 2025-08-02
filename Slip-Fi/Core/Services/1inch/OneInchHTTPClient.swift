@@ -57,7 +57,7 @@ print(String(data: data, encoding: .utf8) ?? "<invalid>")
 }
 
 
-extension Secrets {
-    static let oneInchKey = value(for: "OneInchApiKey")
-}
+//extension Secrets {
+//    static let oneInchKey = value(for: "OneInchApiKey")
+//}
 

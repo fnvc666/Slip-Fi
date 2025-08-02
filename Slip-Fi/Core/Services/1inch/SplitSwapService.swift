@@ -7,16 +7,14 @@
 import Foundation
 
 protocol SplitSwapServiceProtocol {
-    func executeSplitSwapUSDCtoWETH(
-        totalAmount: Decimal,
-        parts: Int,
-        walletAddress: String,
-        slippageBps: Int,
-        waitForConfirmation: Bool,
-        delayBetweenPartsMs: Int,
-        progress: @escaping (Int, Int) -> Void,   // (currentPartIndex, totalParts)
-        shouldCancel: @escaping () -> Bool       // callback
-    ) async throws -> [String]
+     func executeSplitSwap(
+         fromToken: String, fromDecimals: Int,
+         toToken: String, toDecimals: Int,
+         totalAmount: Decimal, parts: Int, walletAddress: String,
+         slippageBps: Int, waitForConfirmation: Bool, delayBetweenPartsMs: Int,
+         progress: @escaping (Int, Int) -> Void,
+         shouldCancel: @escaping () -> Bool
+     ) async throws -> [String]
 }
 
 final class SplitSwapService: SplitSwapServiceProtocol {
@@ -93,7 +91,6 @@ final class SplitSwapService: SplitSwapServiceProtocol {
     }
 
     private func ensureApproveIfNeeded(totalWei: String, wallet: String) async throws {
-        // 1) текущий allowance
         let allowanceStr = try await approveService.getAllowance(
             tokenAddress: Tokens.usdcNative,
             walletAddress: wallet
@@ -143,5 +140,56 @@ final class SplitSwapService: SplitSwapServiceProtocol {
         var r = Decimal(1)
         for _ in 0..<n { r *= 10 }
         return r
+    }
+}
+
+extension SplitSwapService {
+    func executeSplitSwap(
+        fromToken: String, fromDecimals: Int,
+        toToken: String, toDecimals: Int,
+        totalAmount: Decimal, parts: Int, walletAddress: String,
+        slippageBps: Int,
+        waitForConfirmation: Bool,
+        delayBetweenPartsMs: Int,
+        progress: @escaping (Int, Int) -> Void,
+        shouldCancel: @escaping () -> Bool
+    ) async throws -> [String] {
+
+        let totalWeiStr = toBaseUnitsString(totalAmount, decimals: fromDecimals)
+        let chunks = splitWei(totalWeiStr, parts: parts)
+
+        var hashes: [String] = []
+        var sent = 0
+
+        for partWei in chunks {
+            if shouldCancel() { break }
+            if partWei == "0" || partWei == "0x0" { continue }
+
+            let resp: OneInchSwapResponse
+            if fromToken == Tokens.usdcNative && toToken == Tokens.weth {
+                resp = try await swapService.buildSwapTx_USDCtoWETH(amountWei: partWei, fromAddress: walletAddress)
+            } else if fromToken == Tokens.weth && toToken == Tokens.usdcNative {
+                resp = try await swapService.buildSwapTx_WETHtoUSDC(amountWei: partWei, fromAddress: walletAddress)
+            } else if fromToken == Tokens.nativeMatic && toToken == Tokens.usdcNative {
+                resp = try await swapService.buildSwapTx_MaticToUSDC(amountWei: partWei, fromAddress: walletAddress)
+            } else {
+                continue
+            }
+            guard let tx = resp.tx else { continue }
+
+            let hash = try await txSender.send(tx: tx, userAddress: walletAddress, preferWalletGasEstimation: true)
+            hashes.append(hash)
+            sent += 1
+            await MainActor.run { progress(sent, parts) }
+
+            if waitForConfirmation {
+                try await txSender.waitForTransactionConfirmation(txHash: hash)
+            }
+
+            let ns = UInt64(max(delayBetweenPartsMs, 800)) * 1_000_000 // >=800мс
+            try? await Task.sleep(nanoseconds: ns)
+        }
+
+        return hashes
     }
 }

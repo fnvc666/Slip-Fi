@@ -54,6 +54,8 @@ final class SwapViewModel: ObservableObject {
     private var quoteRefreshTask: Task<Void, Never>? = nil
     private let historyKey = "swapHistory"
     
+    private let history = HistoryStore.shared
+    
     private var ignoreNextPayChange = false
     private var ignoreNextReceiveChange = false
     
@@ -157,123 +159,59 @@ final class SwapViewModel: ObservableObject {
         }
     }
     
-    // D3 (approve → swap USDC→WETH)
-    func executeSwapUSDCtoWETH(amount: Decimal) {
-        stopQuoteAutoRefresh()
-        Task {
-            guard !isLoading else { return }
-            isLoading = true
-            defer { isLoading = false }
-            
-            guard let wallet = AppKit.instance.getAddress() else {
-                self.error = "Wallet not connected"
-                return
-            }
-            
-            let amountWei = toWei(amount, decimals: 6)
-            lastAmountWei = amountWei
-            
-            do {
-                let required = Decimal(string: amountWei) ?? 0
-                var allowance = try await approveService.getAllowance(tokenAddress: Tokens.usdcNative, walletAddress: wallet)
-                var allowanceValue = Decimal(string: allowance) ?? 0
-                
-                if allowanceValue < required {
-                    let approveTx = try await approveService.buildApproveTx(tokenAddress: Tokens.usdcNative, amountWei: amountWei, walletAddress: wallet)
-                    let approveHash = try await TxSender.shared.send(tx: approveTx.asOneInchSwapTx(), userAddress: wallet)
-                    
-                    try await waitForTransactionConfirmation(txHash: approveHash)
-                    
-                    allowance = try await approveService.getAllowance(tokenAddress: Tokens.usdcNative, walletAddress: wallet)
-                    allowanceValue = Decimal(string: allowance) ?? 0
-                    
-                    self.split.hashes = [approveHash]
-                    self.successBanner = "✅ Approval отправлен. Следующая транзакция — swap."
-                    
-                    if allowanceValue < required {
-                        self.error = "Allowance not updated after approval"
-                        return
-                    }
-                }
-                
-                let swapTx = try await swapService.buildSwapTx_USDCtoWETH(amountWei: amountWei, fromAddress: wallet)
-                guard let tx = swapTx.tx else {
-                    self.error = "1inch did not return a transaction. Try increasing the amount."
-                    return
-                }
-                
-                let swapHash = try await TxSender.shared.send(tx: tx, userAddress: wallet)
-                self.txHash = swapHash
-                
-                // Сохраняем историю и показываем баннер сразу после отправки
-                self.split.hashes = [swapHash]
-                self.successBanner = "✅ Swap отправлен. Баланс обновится после подтверждения."
-                await MainActor.run { self.appendToHistory(txHashes: [swapHash]) }
-                
-                // Ждём подтверждение и обновляем баланс
-                try await waitForTransactionConfirmation(txHash: swapHash)
-                await MainActor.run { self.updateBalances() }
-                
-            } catch {
-                self.error = error.localizedDescription
-            }
-        }
-    }
-    
-    
     // D4
-    func startSplitSwapUSDCtoWETH(totalAmount: Decimal, parts: Int, slippageBps: Int) {
-        guard parts >= 1, totalAmount > 0 else { return }
-        guard let wallet = AppKit.instance.getAddress() else { return }
-        
-        split.isRunning = true
-        splitCancel = false
-        split.current = 0
-        split.total = parts
-        split.hashes = []
-        split.progressText = "Preparing…"
-        
-        stopQuoteAutoRefresh()
-        Task {
-            do {
-                let hashes = try await splitService.executeSplitSwapUSDCtoWETH(
-                    totalAmount: totalAmount,
-                    parts: parts,
-                    walletAddress: wallet,
-                    slippageBps: currentSlippageBps(),
-                    waitForConfirmation: false,
-                    delayBetweenPartsMs: 250,
-                    progress: { done, total in
-                        self.split.current = done
-                        self.split.total = total
-                        self.split.progressText = "Part \(done)/\(total)…"
-                    },
-                    shouldCancel: { [weak self] in self?.splitCancel == true }
-                )
-                await MainActor.run {
-                    self.split.hashes = hashes
-                    self.successBanner = "✅ Отправлено \(hashes.count) транзакций split-swap. Баланс обновится после подтверждений."
-                    self.appendToHistory(txHashes: hashes)
-                }
-                if let last = hashes.last {
-                    Task.detached { [weak self] in
-                        do {
-                            try await waitForTransactionConfirmation(txHash: last)
-                            await MainActor.run { self?.updateBalances() }
-                        } catch { }
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    self.error = (error as? CancellationError) != nil
-                    ? "Stopped by user"
-                    : error.localizedDescription
-                    self.split.progressText = "Error"
-                }
-            }
-            await MainActor.run { self.split.isRunning = false }
-        }
-    }
+//    func startSplitSwapUSDCtoWETH(totalAmount: Decimal, parts: Int, slippageBps: Int) {
+//        guard parts >= 1, totalAmount > 0 else { return }
+//        guard let wallet = AppKit.instance.getAddress() else { return }
+//        
+//        split.isRunning = true
+//        splitCancel = false
+//        split.current = 0
+//        split.total = parts
+//        split.hashes = []
+//        split.progressText = "Preparing…"
+//        
+//        stopQuoteAutoRefresh()
+//        Task {
+//            do {
+//                let hashes = try await splitService.executeSplitSwapUSDCtoWETH(
+//                    totalAmount: totalAmount,
+//                    parts: parts,
+//                    walletAddress: wallet,
+//                    slippageBps: currentSlippageBps(),
+//                    waitForConfirmation: false,
+//                    delayBetweenPartsMs: 250,
+//                    progress: { done, total in
+//                        self.split.current = done
+//                        self.split.total = total
+//                        self.split.progressText = "Part \(done)/\(total)…"
+//                    },
+//                    shouldCancel: { [weak self] in self?.splitCancel == true }
+//                )
+//                await MainActor.run {
+//                    self.split.hashes = hashes
+//                    self.successBanner = "✅ Отправлено \(hashes.count) транзакций split-swap. Баланс обновится после подтверждений."
+//                    self.appendToHistory(txHashes: hashes)
+//                }
+//                if let last = hashes.last {
+//                    Task.detached { [weak self] in
+//                        do {
+//                            try await waitForTransactionConfirmation(txHash: last)
+//                            await MainActor.run { self?.updateBalances() }
+//                        } catch { }
+//                    }
+//                }
+//            } catch {
+//                await MainActor.run {
+//                    self.error = (error as? CancellationError) != nil
+//                    ? "Stopped by user"
+//                    : error.localizedDescription
+//                    self.split.progressText = "Error"
+//                }
+//            }
+//            await MainActor.run { self.split.isRunning = false }
+//        }
+//    }
     
     func simulateSplitQuotes(from fromToken: String, to toToken: String,
                              amount: Decimal, maxParts: Int) {
@@ -354,34 +292,6 @@ final class SwapViewModel: ObservableObject {
             }
         }
     }
-    
-    
-//    private var quoteCancellable: AnyCancellable?
-    
-//    func bindQuoteDebounce(payText: Published<String>.Publisher) {
-//        quoteCancellable = payText
-//            .debounce(for: .seconds(2), scheduler: RunLoop.main)
-//            .sink { [weak self] txt in
-//                guard let self, let d = Decimal(string: txt), d > 0 else { return }
-//                self.requestQuote(amount: d)
-//            }
-//    }
-    
-//    private func requestQuote(amount: Decimal) {
-//        Task { [self] in
-//            isQuoteLoading = true
-//            do {
-//                let wei = toWei(amount, decimals: self.isUsdcToWeth ? 6 : 18)
-//                self.quote = try await self.quoteService.quote(
-//                    from: self.isUsdcToWeth ? Tokens.usdcNative : Tokens.weth,
-//                    to:   isUsdcToWeth ? Tokens.weth : Tokens.usdcNative,
-//                    amountWei: wei,
-//                    chain: MyChainPresets.polygon
-//                )
-//            } catch { self.error = error.localizedDescription }
-//            isQuoteLoading = false
-//        }
-//    }
     
     private func requestQuoteForward(usdcAmount: Decimal) {
         stopQuoteAutoRefresh()
@@ -526,20 +436,15 @@ final class SwapViewModel: ObservableObject {
             }
         }
     }
-
-
     
     @MainActor
-    private func appendToHistory(txHashes: [String]) {
-        guard !txHashes.isEmpty else { return }
-        
+    private func saveHistory(txHashes: [String]) {
         let fromToken = isUsdcToWeth ? "USDC" : "WETH"
         let toToken   = isUsdcToWeth ? "WETH" : "USDC"
-        
         let fromAmount = Decimal(string: self.payText) ?? 0
         let toAmount   = Decimal(string: self.receiveText) ?? 0
-        
-        let newEntry = TransactionModel(
+
+        let entry = TransactionModel(
             date: Date(),
             fromToken: fromToken,
             fromAmount: NSDecimalNumber(decimal: fromAmount).doubleValue,
@@ -547,107 +452,206 @@ final class SwapViewModel: ObservableObject {
             toAmount: NSDecimalNumber(decimal: toAmount).doubleValue,
             txArray: txHashes
         )
-        
-        var historyList: [TransactionModel] = []
-        if let data = UserDefaults.standard.data(forKey: historyKey),
-           let savedList = try? JSONDecoder().decode([TransactionModel].self, from: data) {
-            historyList = savedList
-        }
-        historyList.append(newEntry)
-        if let encoded = try? JSONEncoder().encode(historyList) {
-            UserDefaults.standard.set(encoded, forKey: historyKey)
+        history.append(entry)
+        self.successBanner = "✅ Транзакция(и) отправлены. Баланс обновится после подтверждений."
+    }
+
+
+    func executeSwap() {
+        guard let amount = Decimal(string: payText), amount > 0 else { return }
+        if isUsdcToWeth {
+            executeSwapUSDCtoWETH(amount: amount)
+        } else {
+            executeSwapWETHtoUSDC(amount: amount)
         }
     }
-    
-    
-    
-    
-    // D4 slip-algorithm
-    //    func simulateSplitQuotes(from fromToken: String, to toToken: String, amount: Decimal, maxParts: Int) {
-    //        Task { [weak self] in
-    //            guard let self else { return }
-    //            guard amount > 0, maxParts >= 1 else { return }
-    //
-    //            self.isLoading = true
-    //            defer { self.isLoading = false }
-    //
-    //            do {
-    //                let fromDecimals = 6
-    //                let toDecimals = 18
-    //
-    //                let totalWeiStr = toBaseUnitsString(amount, decimals: fromDecimals)
-    //                var results: [SplitResult] = []
-    //
-    //                for n in 1...maxParts {
-    //                    let partWeiList = splitWei(totalWeiStr, parts: n)
-    //                    var sumOutWei: Decimal = 0
-    //
-    //                    for partWei in partWeiList {
-    //                        let q = try await self.quoteService.quote(
-    //                            from: fromToken,
-    //                            to: toToken,
-    //                            amountWei: partWei,
-    //                            chain: MyChainPresets.polygon
-    //                        )
-    //                        if let dst = Decimal(string: q.dstAmount) {
-    //                            sumOutWei += dst
-    //                        }
-    //                    }
-    //
-    //                    let totalOut = sumOutWei / pow10(toDecimals)
-    //                    results.append(.init(parts: n,
-    //                                         totalToTokenAmount: totalOut,
-    //                                         deltaVsOnePart: 0))
-    //                }
-    //
-    //                if let base = results.first?.totalToTokenAmount {
-    //                    for i in results.indices {
-    //                        results[i].deltaVsOnePart = results[i].totalToTokenAmount - base
-    //                    }
-    //                }
-    //
-    //                let best = results.max(by: { $0.totalToTokenAmount < $1.totalToTokenAmount })
-    //                await MainActor.run {
-    //                    self.splitResults = results
-    //                    self.bestSplit = best
-    //                    self.selectedParts = best?.parts ?? 1
-    //                }
-    //
-    //            } catch {
-    //                await MainActor.run { self.error = error.localizedDescription }
-    //            }
-    //        }
-    //    }
-    
-    //    func pow10(_ n: Int) -> Decimal {
-    //        var r = Decimal(1)
-    //        for _ in 0..<n { r *= 10 }
-    //        return r
-    //    }
-    
-    //    func toBaseUnitsString(_ amount: Decimal, decimals: Int) -> String {
-    //        let scaled = NSDecimalNumber(decimal: amount * pow10(decimals))
-    //        let handler = NSDecimalNumberHandler(
-    //            roundingMode: .down, scale: 0,
-    //            raiseOnExactness: false, raiseOnOverflow: false,
-    //            raiseOnUnderflow: false, raiseOnDivideByZero: false
-    //        )
-    //        return scaled.rounding(accordingToBehavior: handler).stringValue
-    //    }
-    //
-    //    func splitWei(_ totalWeiStr: String, parts: Int) -> [String] {
-    //        guard let total = UInt64(totalWeiStr), parts > 0 else { return [] }
-    //        let base = total / UInt64(parts)
-    //        let rem  = total % UInt64(parts)
-    //        var out: [String] = []
-    //        out.reserveCapacity(parts)
-    //        for i in 0..<parts {
-    //            let add = i < rem ? 1 : 0
-    //            out.append(String(base + UInt64(add)))
-    //        }
-    //        return out
-    //    }
-    
+
+    // USDC -> WETH
+    func executeSwapUSDCtoWETH(amount: Decimal) {
+        stopQuoteAutoRefresh()
+        Task {
+            guard !isLoading else { return }
+            isLoading = true
+            defer { isLoading = false }
+
+            guard let wallet = AppKit.instance.getAddress() else {
+                self.error = "Wallet not connected"
+                return
+            }
+
+            let amountWei = toWei(amount, decimals: 6)
+            lastAmountWei = amountWei
+
+            do {
+                var txHashes: [String] = []
+
+                // 1) approve при необходимости
+                let required = Decimal(string: amountWei) ?? 0
+                var allowance = try await approveService.getAllowance(tokenAddress: Tokens.usdcNative, walletAddress: wallet)
+                var allowanceValue = Decimal(string: allowance) ?? 0
+
+                if allowanceValue < required {
+                    let approveTx = try await approveService.buildApproveTx(tokenAddress: Tokens.usdcNative, amountWei: amountWei, walletAddress: wallet)
+                    let approveHash = try await TxSender.shared.send(tx: approveTx.asOneInchSwapTx(), userAddress: wallet)
+                    txHashes.append(approveHash)
+                    // не ждём подтверждения для истории — сохраняем сразу
+                }
+
+                // 2) сам свап
+                let swapTx = try await swapService.buildSwapTx_USDCtoWETH(amountWei: amountWei, fromAddress: wallet)
+                guard let tx = swapTx.tx else {
+                    self.error = "1inch did not return a transaction. Try increasing the amount."
+                    return
+                }
+                let swapHash = try await TxSender.shared.send(tx: tx, userAddress: wallet)
+                txHashes.append(swapHash)
+
+                // 3) показать баннер + СРАЗУ положить в историю
+                await MainActor.run {
+                    self.split.hashes = txHashes
+                    self.saveHistory(txHashes: txHashes)
+                }
+
+                // 4) необязательное ожидание подтверждения последнего хэша -> обновление баланса
+                try await waitForTransactionConfirmation(txHash: swapHash)
+                await MainActor.run { self.updateBalances() }
+
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    // WETH -> USDC
+    func executeSwapWETHtoUSDC(amount: Decimal) {
+        stopQuoteAutoRefresh()
+        Task {
+            guard !isLoading else { return }
+            isLoading = true
+            defer { isLoading = false }
+
+            guard let wallet = AppKit.instance.getAddress() else {
+                self.error = "Wallet not connected"
+                return
+            }
+
+            let amountWei = toWei(amount, decimals: Tokens.wethDecimals)
+            lastAmountWei = amountWei
+
+            do {
+                var txHashes: [String] = []
+
+                // 1) approve WETH при необходимости
+                let required = Decimal(string: amountWei) ?? 0
+                var allowance = try await approveService.getAllowance(tokenAddress: Tokens.weth, walletAddress: wallet)
+                var allowanceValue = Decimal(string: allowance) ?? 0
+
+                if allowanceValue < required {
+                    let approveTx = try await approveService.buildApproveTx(tokenAddress: Tokens.weth, amountWei: amountWei, walletAddress: wallet)
+                    let approveHash = try await TxSender.shared.send(tx: approveTx.asOneInchSwapTx(), userAddress: wallet)
+                    txHashes.append(approveHash)
+                }
+
+                // 2) сам свап WETH->USDC
+                let swapTx = try await swapService.buildSwapTx_WETHtoUSDC(amountWei: amountWei, fromAddress: wallet)
+                guard let tx = swapTx.tx else {
+                    self.error = "1inch did not return a transaction. Try increasing the amount."
+                    return
+                }
+                let swapHash = try await TxSender.shared.send(tx: tx, userAddress: wallet)
+                txHashes.append(swapHash)
+
+                // 3) баннер + история сразу
+                await MainActor.run {
+                    self.split.hashes = txHashes
+                    self.saveHistory(txHashes: txHashes)
+                }
+
+                // 4) опционально ждём подтверждение последнего хэша -> обновляем баланс
+                try await waitForTransactionConfirmation(txHash: swapHash)
+                await MainActor.run { self.updateBalances() }
+
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func startSplitSwap(totalAmount: Decimal, parts: Int, slippageBps: Int) {
+        guard parts >= 1, totalAmount > 0 else { return }
+        guard let wallet = AppKit.instance.getAddress() else { return }
+
+        split.isRunning = true
+        splitCancel = false
+        split.current = 0
+        split.total = parts
+        split.hashes = []
+        split.progressText = "Preparing…"
+
+        stopQuoteAutoRefresh()
+
+        Task {
+            do {
+                let (fromToken, fromDecimals, toToken, toDecimals) = isUsdcToWeth
+                ? (Tokens.usdcNative, 6, Tokens.weth, Tokens.wethDecimals)
+                : (Tokens.weth, Tokens.wethDecimals, Tokens.usdcNative, 6)
+
+                // approve (на весь totalAmount) заранее — чтобы не делать approve на каждую часть
+                do {
+                    let totalWei = toWei(totalAmount, decimals: fromDecimals)
+                    let required = Decimal(string: totalWei) ?? 0
+                    var allowance = try await approveService.getAllowance(tokenAddress: fromToken, walletAddress: wallet)
+                    var allowanceValue = Decimal(string: allowance) ?? 0
+                    if allowanceValue < required {
+                        let approveTx = try await approveService.buildApproveTx(tokenAddress: fromToken, amountWei: totalWei, walletAddress: wallet)
+                        let approveHash = try await TxSender.shared.send(tx: approveTx.asOneInchSwapTx(), userAddress: wallet)
+                        // логируем в список хэшей сразу, но не ждём
+                        await MainActor.run {
+                            self.split.hashes.append(approveHash)
+                            self.successBanner = "✅ Approval отправлен. Начинаем split…"
+                        }
+                    }
+                }
+
+                // теперь отправляем сами части
+                let hashes = try await splitService.executeSplitSwap(
+                    fromToken: fromToken, fromDecimals: fromDecimals,
+                    toToken: toToken, toDecimals: toDecimals,
+                    totalAmount: totalAmount, parts: parts, walletAddress: wallet,
+                    slippageBps: slippageBps, waitForConfirmation: false, delayBetweenPartsMs: 250,
+                    progress: { done, total in
+                        self.split.current = done
+                        self.split.total = total
+                        self.split.progressText = "Part \(done)/\(total)…"
+                    },
+                    shouldCancel: { [weak self] in self?.splitCancel == true }
+                )
+
+                await MainActor.run {
+                    self.split.hashes.append(contentsOf: hashes)
+                    self.successBanner = "✅ Отправлено \(hashes.count) транзакций split-swap."
+                    self.saveHistory(txHashes: self.split.hashes)
+                }
+
+                // ждём подтверждение последнего, потом обновляем баланс (асинхронно)
+                if let last = hashes.last {
+                    Task.detached { [weak self] in
+                        do {
+                            try await waitForTransactionConfirmation(txHash: last)
+                            await MainActor.run { self?.updateBalances() }
+                        } catch {}
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.error = (error as? CancellationError) != nil ? "Stopped by user" : error.localizedDescription
+                    self.split.progressText = "Error"
+                }
+            }
+            await MainActor.run { self.split.isRunning = false }
+        }
+    }
+
 }
 
 // MARK: - HELPERS

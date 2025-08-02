@@ -70,4 +70,5 @@ enum Secrets {
     
     static var appKitProjectId = value(for: "AppKitProjectId")
     static var groupIdentifier = value(for: "GroupIdentifier")
+    static let oneInchKey = value(for: "OneInchApiKey")
 }
