@@ -78,21 +78,25 @@ struct SwapView: View {
                                 backgroundImage: "youPayBackground",
                                 isLoading: vm.isQuoteLoadingPay,
                                 option: "You pay",
-                                balance: String(format: "%.2f", vm.isUsdcToWeth ? vm.usdcBalance.doubleValue : vm.wethBalance.doubleValue),
+                                balance: String(format: "%.2f", vm.isUsdcToWeth
+                                                ? vm.usdcBalance.doubleValue
+                                                : vm.wethBalanceUSD.doubleValue),
                                 token: vm.isUsdcToWeth ? "USDC" : "WETH",
                                 tokenImage: vm.isUsdcToWeth ? "usdc" : "weth"
                             )
-
+                            
                             SwapBox(
                                 amount: $vm.receiveText,
                                 backgroundImage: "youReceiveBackground",
                                 isLoading: vm.isQuoteLoadingReceive,
                                 option: "You Receive",
-                                balance: String(format: "%.2f", vm.isUsdcToWeth ? vm.wethBalance.doubleValue : vm.usdcBalance.doubleValue),
+                                balance: String(format: "%.2f", vm.isUsdcToWeth
+                                                ? vm.wethBalanceUSD.doubleValue
+                                                : vm.usdcBalance.doubleValue),
                                 token: vm.isUsdcToWeth ? "WETH" : "USDC",
                                 tokenImage: vm.isUsdcToWeth ? "weth" : "usdc"
                             )
-
+                            
                         }
                         
                         Button {
@@ -162,7 +166,7 @@ struct SwapView: View {
                     print("tapped")
                     focusedField = nil
                 }
-
+                
                 .padding(.top, 15)
                 .padding(.bottom, 60)
             }
@@ -197,7 +201,7 @@ struct SwapBox: View {
                     if isLoading {
                         ProgressView()
                             .frame(height: 30)
-                                                        .padding(.top, 5)
+                            .padding(.top, 5)
                     } else {
                         TextField("amount", text: $amount)
                             .font(.system(size: 24, weight: .semibold))

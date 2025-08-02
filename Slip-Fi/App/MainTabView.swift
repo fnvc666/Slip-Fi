@@ -23,6 +23,7 @@ struct MainTabView: View {
                 .padding(.bottom, 8)
             }
             .animation(.easeInOut(duration: 0.2), value: selectedTab)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
     @ViewBuilder

@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct HistoryView: View {
-    var transactions: [TransactionModel] = []
+    @State private var transactions: [TransactionModel] = []
     var body: some View {
         ZStack {
             ScrollView(.vertical, showsIndicators: false) {
@@ -31,7 +31,12 @@ struct HistoryView: View {
             }
         }
         .background(Color(red: 0.04, green: 0.07, blue: 0.09))
-//        .ignoresSafeArea(edges: .top)
+        .onAppear {
+            if let data = UserDefaults.standard.data(forKey: "swapHistory"),
+               let savedList = try? JSONDecoder().decode([TransactionModel].self, from: data) {
+                self.transactions = savedList.reversed()
+            }
+        }
     }
 }
 
@@ -40,14 +45,14 @@ struct TransactionBox: View {
     var transaction: TransactionModel
     
     private static let dateFormatter: DateFormatter = {
-      let f = DateFormatter()
-      f.dateFormat = "MM/dd/yyyy"
-      return f
+        let f = DateFormatter()
+        f.dateFormat = "MM/dd/yyyy"
+        return f
     }()
     var formattedDate: String {
-      Self.dateFormatter.string(from: transaction.date)
+        Self.dateFormatter.string(from: transaction.date)
     }
-
+    
     
     var body: some View {
         VStack {
@@ -102,7 +107,11 @@ struct TransactionBox: View {
                 Spacer()
                 
                 Button {
-                    // view button, link to tx
+                    for tx in transaction.txArray {
+                                if let url = URL(string: "https://polygonscan.com/tx/\(tx)") {
+                                    UIApplication.shared.open(url)
+                                }
+                            }
                 } label: {
                     Text("View")
                         .font(.system(size: 12, weight: .medium))
@@ -122,21 +131,10 @@ struct TransactionBox: View {
     }
 }
 
-struct TransactionModel: Identifiable, Hashable {
-    var id: UUID = UUID()
-    var date: Date
-    var fromToken: String
-    var fromAmount: Double
-    var toToken: String
-    var toAmount: Double
-    var txArray: [String] = []
-}
-
-
-#Preview {
-    var transaction1 = TransactionModel(date: Date.now, fromToken: "USDC", fromAmount: 100, toToken: "WETH", toAmount: 0.0282024419, txArray: [
-        "0x1d1fd6afdcd933d913516ef4a4606f63dc1c49c67f006e6173e8d6ad4801088a",
-        "0xc82223184d99e4bdbdd935ec366b82e5016d93e4f8fa7b961a8b958765698a93",
-        "0x1ff5d262c4d4baaf433570772bf7237e598fe24c52741b19d21ded5cc19ebd8c"])
-    HistoryView(transactions: [transaction1])
-}
+//#Preview {
+//    var transaction1 = TransactionModel(date: Date.now, fromToken: "USDC", fromAmount: 100, toToken: "WETH", toAmount: 0.0282024419, txArray: [
+//        "0x1d1fd6afdcd933d913516ef4a4606f63dc1c49c67f006e6173e8d6ad4801088a",
+//        "0xc82223184d99e4bdbdd935ec366b82e5016d93e4f8fa7b961a8b958765698a93",
+//        "0x1ff5d262c4d4baaf433570772bf7237e598fe24c52741b19d21ded5cc19ebd8c"])
+//    HistoryView(transactions: [transaction1])
+//}

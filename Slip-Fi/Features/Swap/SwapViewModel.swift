@@ -23,10 +23,10 @@ struct SplitState {
 
 @MainActor
 final class SwapViewModel: ObservableObject {
-
+    
     @Published var payText: String = ""
     @Published var receiveText: String = ""
-
+    
     @Published var isQuoteLoadingPay = false
     @Published var isQuoteLoadingReceive = false
     
@@ -43,14 +43,20 @@ final class SwapViewModel: ObservableObject {
     @Published var usdcBalance: Decimal = 0
     @Published var wethBalance: Decimal = 0
     @Published var isUsdcToWeth = true
+    @Published var wethBalanceUSD: Decimal = 0
     
     @Published var successBanner: String? = nil
     
     @Published var split = SplitState()
     
-    
     private var cancellables = Set<AnyCancellable>()
     private var isProgrammaticUpdate = false
+    private var quoteRefreshTask: Task<Void, Never>? = nil
+    private let historyKey = "swapHistory"
+    
+    private var ignoreNextPayChange = false
+    private var ignoreNextReceiveChange = false
+    
     
     private let splitService: SplitSwapServiceProtocol
     private let quoteService: QuoteService = OneInchQuoteService()
@@ -60,49 +66,55 @@ final class SwapViewModel: ObservableObject {
     init(splitService: SplitSwapServiceProtocol) {
         self.splitService = splitService
         
-        quoteCancellable = $payText
-            .debounce(for: .seconds(2), scheduler: RunLoop.main)
-            .sink { [weak self] txt in
-                guard let self, let d = Decimal(string: txt), d > 0 else { return }
-                self.requestQuote(amount: d)
-            }
+//        quoteCancellable = $payText
+//            .debounce(for: .seconds(2), scheduler: RunLoop.main)
+//            .sink { [weak self] txt in
+//                guard let self, let d = Decimal(string: txt), d > 0 else { return }
+//                self.requestQuote(amount: d)
+//            }
         
         $payText
             .removeDuplicates()
             .debounce(for: .milliseconds(600), scheduler: RunLoop.main)
             .sink { [weak self] txt in
                 guard let self else { return }
-                guard !self.isProgrammaticUpdate else { return }     // не реагируем на свои же обновления
-                guard let d = Decimal(string: txt), d > 0 else {
-                    self.isProgrammaticUpdate = true
-                    self.receiveText = ""
-                    self.quote = nil
-                    self.isProgrammaticUpdate = false
+                // если поле изменили программно — заглушаем РОВНО один раз
+                if self.ignoreNextPayChange {
+                    self.ignoreNextPayChange = false
                     return
                 }
-                // Прямой расчёт: USDC -> WETH, считаем Receive
+                guard let d = Decimal(string: txt), d > 0 else {
+                    self.ignoreNextReceiveChange = true  // чтобы очистка receive не триггерила обратный пересчёт
+                    self.receiveText = ""
+                    self.quote = nil
+                    return
+                }
+                // Прямой расчёт: USDC -> WETH
                 self.requestQuoteForward(usdcAmount: d)
             }
             .store(in: &cancellables)
-
+        
         $receiveText
             .removeDuplicates()
             .debounce(for: .milliseconds(600), scheduler: RunLoop.main)
             .sink { [weak self] txt in
                 guard let self else { return }
-                guard !self.isProgrammaticUpdate else { return }
+                if self.ignoreNextReceiveChange {
+                    self.ignoreNextReceiveChange = false
+                    return
+                }
                 guard let d = Decimal(string: txt), d > 0 else {
-                    self.isProgrammaticUpdate = true
+                    self.ignoreNextPayChange = true      // чтобы очистка pay не триггерила пересчёт
                     self.payText = ""
                     self.quote = nil
-                    self.isProgrammaticUpdate = false
                     return
                 }
                 // Обратный расчёт: хотим X WETH -> считаем, сколько нужно USDC
                 self.requestQuoteReverse(wethAmount: d)
             }
             .store(in: &cancellables)
-
+        
+        
         
         updateBalances()
     }
@@ -147,6 +159,7 @@ final class SwapViewModel: ObservableObject {
     
     // D3 (approve → swap USDC→WETH)
     func executeSwapUSDCtoWETH(amount: Decimal) {
+        stopQuoteAutoRefresh()
         Task {
             guard !isLoading else { return }
             isLoading = true
@@ -169,18 +182,13 @@ final class SwapViewModel: ObservableObject {
                     let approveTx = try await approveService.buildApproveTx(tokenAddress: Tokens.usdcNative, amountWei: amountWei, walletAddress: wallet)
                     let approveHash = try await TxSender.shared.send(tx: approveTx.asOneInchSwapTx(), userAddress: wallet)
                     
-                    
                     try await waitForTransactionConfirmation(txHash: approveHash)
                     
                     allowance = try await approveService.getAllowance(tokenAddress: Tokens.usdcNative, walletAddress: wallet)
                     allowanceValue = Decimal(string: allowance) ?? 0
                     
-                    self.split.hashes.removeAll()
-                    self.split.hashes.append(approveHash)
+                    self.split.hashes = [approveHash]
                     self.successBanner = "✅ Approval отправлен. Следующая транзакция — swap."
-                    
-                    try await waitForTransactionConfirmation(txHash: approveHash)
-                    
                     
                     if allowanceValue < required {
                         self.error = "Allowance not updated after approval"
@@ -193,33 +201,25 @@ final class SwapViewModel: ObservableObject {
                     self.error = "1inch did not return a transaction. Try increasing the amount."
                     return
                 }
+                
                 let swapHash = try await TxSender.shared.send(tx: tx, userAddress: wallet)
                 self.txHash = swapHash
                 
+                // Сохраняем историю и показываем баннер сразу после отправки
+                self.split.hashes = [swapHash]
+                self.successBanner = "✅ Swap отправлен. Баланс обновится после подтверждения."
+                await MainActor.run { self.appendToHistory(txHashes: [swapHash]) }
+                
+                // Ждём подтверждение и обновляем баланс
                 try await waitForTransactionConfirmation(txHash: swapHash)
-                await MainActor.run {
-                    self.updateBalances()
-                }
-                
-                self.split.hashes.removeAll()
-                self.split.hashes.append(swapHash)
-                self.successBanner = "Transactions approved."
-                
-                Task.detached { [weak self] in
-                    guard let self else { return }
-                    do {
-                        try await waitForTransactionConfirmation(txHash: swapHash)
-                        await MainActor.run { self.updateBalances() }
-                    } catch {
-                        //
-                    }
-                }
+                await MainActor.run { self.updateBalances() }
                 
             } catch {
                 self.error = error.localizedDescription
             }
         }
     }
+    
     
     // D4
     func startSplitSwapUSDCtoWETH(totalAmount: Decimal, parts: Int, slippageBps: Int) {
@@ -233,6 +233,7 @@ final class SwapViewModel: ObservableObject {
         split.hashes = []
         split.progressText = "Preparing…"
         
+        stopQuoteAutoRefresh()
         Task {
             do {
                 let hashes = try await splitService.executeSplitSwapUSDCtoWETH(
@@ -252,6 +253,7 @@ final class SwapViewModel: ObservableObject {
                 await MainActor.run {
                     self.split.hashes = hashes
                     self.successBanner = "✅ Отправлено \(hashes.count) транзакций split-swap. Баланс обновится после подтверждений."
+                    self.appendToHistory(txHashes: hashes)
                 }
                 if let last = hashes.last {
                     Task.detached { [weak self] in
@@ -329,51 +331,60 @@ final class SwapViewModel: ObservableObject {
             guard let addr = AppKit.instance.getAddress() else { return }
             do {
                 let usdcWei = try await ERC20BalanceService.balanceOfWei(
-                    token: Tokens.usdcNative,
-                    wallet: addr,
-                    rpcUrl: MyChainPresets.polygon.rpcUrl
-                )
+                    token: Tokens.usdcNative, wallet: addr, rpcUrl: MyChainPresets.polygon.rpcUrl)
                 let wethWei = try await ERC20BalanceService.balanceOfWei(
-                    token: Tokens.weth,
-                    wallet: addr,
-                    rpcUrl: MyChainPresets.polygon.rpcUrl
-                )
+                    token: Tokens.weth, wallet: addr, rpcUrl: MyChainPresets.polygon.rpcUrl)
                 await MainActor.run {
-                    usdcBalance = usdcWei / pow10(6)
-                    wethBalance = wethWei / pow10(18)
+                    self.usdcBalance = usdcWei / pow10(6)
+                    self.wethBalance = wethWei / pow10(18)
                 }
-            } catch { print("balance error", error) }
-        }
-    }
-    
-    private var quoteCancellable: AnyCancellable?
-    
-    func bindQuoteDebounce(payText: Published<String>.Publisher) {
-        quoteCancellable = payText
-            .debounce(for: .seconds(2), scheduler: RunLoop.main)
-            .sink { [weak self] txt in
-                guard let self, let d = Decimal(string: txt), d > 0 else { return }
-                self.requestQuote(amount: d)
+                let oneWethWei = toWei(1, decimals: Tokens.wethDecimals)
+                let quote = try await quoteService.quote(
+                    from: Tokens.weth, to: Tokens.usdcNative,
+                    amountWei: oneWethWei, chain: MyChainPresets.polygon)
+                if let usdcOutWei = Decimal(string: quote.dstAmount) {
+                    let priceOneWeth = usdcOutWei / pow10(6)
+                    let wethAmount = wethWei / pow10(18)
+                    await MainActor.run {
+                        self.wethBalanceUSD = wethAmount * priceOneWeth
+                    }
+                }
+            } catch {
+                print("Ошибка обновления балансов:", error)
             }
-    }
-    
-    private func requestQuote(amount: Decimal) {
-        Task { [self] in
-            isQuoteLoading = true
-            do {
-                let wei = toWei(amount, decimals: self.isUsdcToWeth ? 6 : 18)
-                self.quote = try await self.quoteService.quote(
-                    from: self.isUsdcToWeth ? Tokens.usdcNative : Tokens.weth,
-                    to:   isUsdcToWeth ? Tokens.weth : Tokens.usdcNative,
-                    amountWei: wei,
-                    chain: MyChainPresets.polygon
-                )
-            } catch { self.error = error.localizedDescription }
-            isQuoteLoading = false
         }
     }
+    
+    
+//    private var quoteCancellable: AnyCancellable?
+    
+//    func bindQuoteDebounce(payText: Published<String>.Publisher) {
+//        quoteCancellable = payText
+//            .debounce(for: .seconds(2), scheduler: RunLoop.main)
+//            .sink { [weak self] txt in
+//                guard let self, let d = Decimal(string: txt), d > 0 else { return }
+//                self.requestQuote(amount: d)
+//            }
+//    }
+    
+//    private func requestQuote(amount: Decimal) {
+//        Task { [self] in
+//            isQuoteLoading = true
+//            do {
+//                let wei = toWei(amount, decimals: self.isUsdcToWeth ? 6 : 18)
+//                self.quote = try await self.quoteService.quote(
+//                    from: self.isUsdcToWeth ? Tokens.usdcNative : Tokens.weth,
+//                    to:   isUsdcToWeth ? Tokens.weth : Tokens.usdcNative,
+//                    amountWei: wei,
+//                    chain: MyChainPresets.polygon
+//                )
+//            } catch { self.error = error.localizedDescription }
+//            isQuoteLoading = false
+//        }
+//    }
     
     private func requestQuoteForward(usdcAmount: Decimal) {
+        stopQuoteAutoRefresh()
         Task { [self] in
             isQuoteLoadingReceive = true
             defer { isQuoteLoadingReceive = false }
@@ -385,20 +396,23 @@ final class SwapViewModel: ObservableObject {
                 )
                 let outWei = Decimal(string: q.dstAmount) ?? 0
                 let out = outWei / pow10(Tokens.wethDecimals)
-
+                
                 await MainActor.run {
                     self.quote = q
-                    self.isProgrammaticUpdate = true
+                    self.ignoreNextReceiveChange = true     // <— ВАЖНО
                     self.receiveText = NSDecimalNumber(decimal: out).stringValue
-                    self.isProgrammaticUpdate = false
                 }
+                startQuoteAutoRefresh()
             } catch {
                 await MainActor.run { self.error = error.localizedDescription }
             }
         }
     }
-
+    
+    
+    
     private func requestQuoteReverse(wethAmount: Decimal) {
+        stopQuoteAutoRefresh()
         Task { [self] in
             isQuoteLoadingPay = true
             defer { isQuoteLoadingPay = false }
@@ -410,37 +424,142 @@ final class SwapViewModel: ObservableObject {
                 )
                 let usdcWei = Decimal(string: q.dstAmount) ?? 0
                 let usdc = usdcWei / pow10(6)
-
-                await MainActor.run {
-                    self.isProgrammaticUpdate = true
-                    self.payText = NSDecimalNumber(decimal: usdc).stringValue
-                    self.isProgrammaticUpdate = false
-                }
                 
-                await self.requestQuoteForward(usdcAmount: usdc)
+                await MainActor.run {
+                    self.ignoreNextPayChange = true         // <— ВАЖНО
+                    self.payText = NSDecimalNumber(decimal: usdc).stringValue
+                }
+                // чтобы обновить и receive по прямому пути
+                self.requestQuoteForward(usdcAmount: usdc)
             } catch {
                 await MainActor.run { self.error = error.localizedDescription }
             }
         }
     }
+    
+    
+    
+    private func startQuoteAutoRefresh() {
+        stopQuoteAutoRefresh()
+        
+        quoteRefreshTask = Task.detached { [weak self] in
+            guard let self else { return }
+            
+            while !Task.isCancelled {
+                // ... внутри while
+                try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)     // 5с показываем цифру
+                if Task.isCancelled { break }
 
+                let (payAmount, isForward) = await MainActor.run {
+                    (Decimal(string: self.payText) ?? 0, self.isUsdcToWeth)
+                }
+
+                // Включаем прогресс на ровно 2 секунды
+                await MainActor.run { self.isQuoteLoadingReceive = true }
+
+                let fetchTask = Task.detached { () -> (QuoteResponse?, Decimal?) in
+                    do {
+                        if isForward {
+                            let wei = toWei(payAmount, decimals: 6)
+                            let q = try await self.quoteService.quote(
+                                from: Tokens.usdcNative, to: Tokens.weth,
+                                amountWei: wei, chain: MyChainPresets.polygon
+                            )
+                            if let outWei = Decimal(string: q.dstAmount) {
+                                return (q, outWei / pow10(Tokens.wethDecimals))
+                            }
+                        } else {
+                            let wei = toWei(payAmount, decimals: Tokens.wethDecimals)
+                            let q = try await self.quoteService.quote(
+                                from: Tokens.weth, to: Tokens.usdcNative,
+                                amountWei: wei, chain: MyChainPresets.polygon
+                            )
+                            if let outWei = Decimal(string: q.dstAmount) {
+                                return (q, outWei / pow10(6))
+                            }
+                        }
+                    } catch {}
+                    return (nil, nil)
+                }
+
+                try? await Task.sleep(nanoseconds: 2 * 1_000_000_000)
+                let (q, out) = await fetchTask.value
+                if Task.isCancelled { break }
+
+                await MainActor.run {
+                    self.isQuoteLoadingReceive = false
+                    if let q, let out {
+                        self.quote = q
+                        self.ignoreNextReceiveChange = true
+                        self.receiveText = NSDecimalNumber(decimal: out).stringValue
+                    }
+                }
+
+            }
+        }
+    }
+    
+    
+    
+    private func stopQuoteAutoRefresh() {
+        quoteRefreshTask?.cancel()
+        quoteRefreshTask = nil
+    }
+    
     
     
     func switchDirection() {
+        stopQuoteAutoRefresh()
         isUsdcToWeth.toggle()
         quote = nil
-        split.results.removeAll()
-        split.best = nil
+        split.results.removeAll(); split.best = nil
 
-        isProgrammaticUpdate = true
+        ignoreNextPayChange = true
+        ignoreNextReceiveChange = true
         swap(&payText, &receiveText)
-        isProgrammaticUpdate = false
 
         if let d = Decimal(string: payText), d > 0 {
-            requestQuoteForward(usdcAmount: d)
+            if isUsdcToWeth {
+                requestQuoteForward(usdcAmount: d)  // USDC -> WETH
+            } else {
+                requestQuoteReverse(wethAmount: d)  // WETH -> USDC
+            }
         }
     }
 
+
+    
+    @MainActor
+    private func appendToHistory(txHashes: [String]) {
+        guard !txHashes.isEmpty else { return }
+        
+        let fromToken = isUsdcToWeth ? "USDC" : "WETH"
+        let toToken   = isUsdcToWeth ? "WETH" : "USDC"
+        
+        let fromAmount = Decimal(string: self.payText) ?? 0
+        let toAmount   = Decimal(string: self.receiveText) ?? 0
+        
+        let newEntry = TransactionModel(
+            date: Date(),
+            fromToken: fromToken,
+            fromAmount: NSDecimalNumber(decimal: fromAmount).doubleValue,
+            toToken: toToken,
+            toAmount: NSDecimalNumber(decimal: toAmount).doubleValue,
+            txArray: txHashes
+        )
+        
+        var historyList: [TransactionModel] = []
+        if let data = UserDefaults.standard.data(forKey: historyKey),
+           let savedList = try? JSONDecoder().decode([TransactionModel].self, from: data) {
+            historyList = savedList
+        }
+        historyList.append(newEntry)
+        if let encoded = try? JSONEncoder().encode(historyList) {
+            UserDefaults.standard.set(encoded, forKey: historyKey)
+        }
+    }
+    
+    
     
     
     // D4 slip-algorithm
