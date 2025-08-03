@@ -15,7 +15,7 @@ struct SwapView: View {
     
     @State private var testEth = "0"
     
-    private var accountAddress: String = UserDefaults.standard.string(forKey: "accountAddress") ?? "0x111111125421cA6dc452d289314280a0f8842A65"
+    private var accountAddress: String = UserDefaults.standard.string(forKey: "accountAddress") ?? "0x1C9e3253CF6629e692FcCE047e26E131CeAa3c08"
     
     enum FocusedField: Hashable {
         case matic, usdc
@@ -258,7 +258,7 @@ struct SplitStack: View {
                         SplitResultRow(vm: vm, result: res)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 7)
-                            .fontWeight(res.parts == (vm.split.best?.parts ?? -1) ? .bold : .regular)
+//                            .fontWeight(res.parts == (vm.split.best?.parts ?? -1) ? .bold : .regular)
                         
                         if index < vm.split.results.count - 1 {
                             Divider()
@@ -308,12 +308,15 @@ struct SplitStack: View {
                         }
                     } label: {
                         Text(vm.awaitingConfirmation ? "Confirm Swap" : "Swap without Split")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.white)
                     }
-
+                    
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(.white.opacity(0.2))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .disabled(vm.split.isRunning)
                     
                     Button {
                         let amt = Decimal(string: usdcAmount) ?? 0
@@ -323,49 +326,63 @@ struct SplitStack: View {
                             vm.startSplitSwap(totalAmount: amt, parts: vm.split.selectedParts, slippageBps: 100)
                         }
                     } label: {
-                        Text("Swap with Split")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.black)
+                        if vm.split.isRunning, vm.split.total > 0 {
+                            Text("Confirm \(min(vm.split.current + 1, vm.split.total))/\(vm.split.total)")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.black)
+                        } else {
+                            Text("Swap with Split")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.black)
+                        }
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .disabled(vm.isLoading || vm.split.isRunning || vm.awaitingConfirmation)
                 }
                 .padding(.top, 24)
+                
+                if vm.split.isRunning {
+                    Text(vm.split.progressText ?? "")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .padding(.top, 8)
+                }
             }
         }
     }
-}
-
-struct SplitResultRow: View {
-    @ObservedObject var vm: SwapViewModel
-    var result: SplitResult
-    var body: some View {
-        let toSymbol = vm.isUsdcToWeth ? "WETH" : "USDC"
-        HStack {
-            Text("\(result.parts) split")
-                .font(.system(size: 12))
-                .foregroundStyle(Color(red: 0.46, green: 0.5, blue: 0.52))
-            
-            Spacer()
-            
-            Text(String(format: "%.4f \(toSymbol)",
-                        NSDecimalNumber(decimal: result.totalToTokenAmount).doubleValue))
-            .font(.system(size: 14))
-            .foregroundStyle(Color(red: 0.04, green: 0.07, blue: 0.09))
-            
-            let diff = result.deltaVsOnePart
-            let pct  = (result.totalToTokenAmount == 0 || vm.split.results.first?.totalToTokenAmount == 0)
-            ? 0.0
-            : (NSDecimalNumber(decimal: diff).doubleValue /
-               NSDecimalNumber(decimal: vm.split.results.first!.totalToTokenAmount).doubleValue * 100.0)
-            Text(diff >= 0
-                 ? String(format: "+%.4f WETH (%.3f%%)", diff.doubleValue, pct)
-                 : String(format: "%.4f WETH (%.3f%%)", diff.doubleValue, pct))
-            .multilineTextAlignment(.trailing)
-            .font(.system(size: 14))
-            .foregroundColor(diff >= 0 ? Color(red: 0.02, green: 0.68, blue: 0.57).opacity(0.8) : Color(red: 0.68, green: 0.02, blue: 0.03).opacity(0.8))
+    
+    struct SplitResultRow: View {
+        @ObservedObject var vm: SwapViewModel
+        var result: SplitResult
+        var body: some View {
+            let toSymbol = vm.isUsdcToWeth ? "WETH" : "USDC"
+            HStack {
+                Text("\(result.parts) split")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color(red: 0.46, green: 0.5, blue: 0.52))
+                
+                Spacer()
+                
+                Text(String(format: "%.4f \(toSymbol)",
+                            NSDecimalNumber(decimal: result.totalToTokenAmount).doubleValue))
+                .font(.system(size: 14))
+                .foregroundStyle(Color(red: 0.04, green: 0.07, blue: 0.09))
+                
+                let diff = result.deltaVsOnePart
+                let pct  = (result.totalToTokenAmount == 0 || vm.split.results.first?.totalToTokenAmount == 0)
+                ? 0.0
+                : (NSDecimalNumber(decimal: diff).doubleValue /
+                   NSDecimalNumber(decimal: vm.split.results.first!.totalToTokenAmount).doubleValue * 100.0)
+                Text(diff >= 0
+                     ? String(format: "+%.4f WETH (%.3f%%)", diff.doubleValue, pct)
+                     : String(format: "%.4f WETH (%.3f%%)", diff.doubleValue, pct))
+                .multilineTextAlignment(.trailing)
+                .font(.system(size: 14))
+                .foregroundColor(diff >= 0 ? Color(red: 0.02, green: 0.68, blue: 0.57).opacity(0.8) : Color(red: 0.68, green: 0.02, blue: 0.03).opacity(0.8))
+            }
         }
     }
 }

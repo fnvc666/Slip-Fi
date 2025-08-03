@@ -97,7 +97,6 @@ final class SwapViewModel: ObservableObject {
                     self.quote = nil
                     return
                 }
-                // Прямой расчёт: USDC -> WETH
                 self.requestQuoteForward(usdcAmount: d)
             }
             .store(in: &cancellables)
@@ -112,12 +111,11 @@ final class SwapViewModel: ObservableObject {
                     return
                 }
                 guard let d = Decimal(string: txt), d > 0 else {
-                    self.ignoreNextPayChange = true      // чтобы очистка pay не триггерила пересчёт
+                    self.ignoreNextPayChange = true
                     self.payText = ""
                     self.quote = nil
                     return
                 }
-                // Обратный расчёт: хотим X WETH -> считаем, сколько нужно USDC
                 self.requestQuoteReverse(wethAmount: d)
             }
             .store(in: &cancellables)
@@ -140,82 +138,27 @@ final class SwapViewModel: ObservableObject {
         }
     }
     
-    // D2 (swap without approve)
-    func swapMaticToUsdc(amountMatic: Decimal) {
-        Task { [self] in
-            guard let fromAddress = AppKit.instance.getAddress() else {
-                error = "Wallet not connected"
-                return
-            }
-            do {
-                isBuilding = true
-                let wei = toWei(amountMatic, decimals: 18)
-                let swapTx = try await swapService.buildSwapTx_MaticToUSDC(amountWei: wei, fromAddress: fromAddress)
-                isBuilding = false
-                isSending = true
-                
-                guard let tx = swapTx.tx else {
-                    self.error = "1inch did not return a transaction. Try increasing the amount."
-                    return
-                }
-                let hash = try await TxSender.shared.send(tx: tx, userAddress: fromAddress)
-                txHash = hash
-            } catch { self.error = error.localizedDescription }
-            isSending = false
-        }
-    }
-    
-    // D4
-//    func startSplitSwapUSDCtoWETH(totalAmount: Decimal, parts: Int, slippageBps: Int) {
-//        guard parts >= 1, totalAmount > 0 else { return }
-//        guard let wallet = AppKit.instance.getAddress() else { return }
-//        
-//        split.isRunning = true
-//        splitCancel = false
-//        split.current = 0
-//        split.total = parts
-//        split.hashes = []
-//        split.progressText = "Preparing…"
-//        
-//        stopQuoteAutoRefresh()
-//        Task {
-//            do {
-//                let hashes = try await splitService.executeSplitSwapUSDCtoWETH(
-//                    totalAmount: totalAmount,
-//                    parts: parts,
-//                    walletAddress: wallet,
-//                    slippageBps: currentSlippageBps(),
-//                    waitForConfirmation: false,
-//                    delayBetweenPartsMs: 250,
-//                    progress: { done, total in
-//                        self.split.current = done
-//                        self.split.total = total
-//                        self.split.progressText = "Part \(done)/\(total)…"
-//                    },
-//                    shouldCancel: { [weak self] in self?.splitCancel == true }
-//                )
-//                await MainActor.run {
-//                    self.split.hashes = hashes
-//                    self.successBanner = "✅ Отправлено \(hashes.count) транзакций split-swap. Баланс обновится после подтверждений."
-//                    self.appendToHistory(txHashes: hashes)
-//                }
-//                if let last = hashes.last {
-//                    Task.detached { [weak self] in
-//                        do {
-//                            try await waitForTransactionConfirmation(txHash: last)
-//                            await MainActor.run { self?.updateBalances() }
-//                        } catch { }
-//                    }
-//                }
-//            } catch {
-//                await MainActor.run {
-//                    self.error = (error as? CancellationError) != nil
-//                    ? "Stopped by user"
-//                    : error.localizedDescription
-//                    self.split.progressText = "Error"
-//                }
+//    func swapMaticToUsdc(amountMatic: Decimal) {
+//        Task { [self] in
+//            guard let fromAddress = AppKit.instance.getAddress() else {
+//                error = "Wallet not connected"
+//                return
 //            }
-//            await MainActor.run { self.split.isRunning = false }
+//            do {
+//                isBuilding = true
+//                let wei = toWei(amountMatic, decimals: 18)
+//                let swapTx = try await swapService.buildSwapTx_MaticToUSDC(amountWei: wei, fromAddress: fromAddress)
+//                isBuilding = false
+//                isSending = true
+//                
+//                guard let tx = swapTx.tx else {
+//                    self.error = "1inch did not return a transaction. Try increasing the amount."
+//                    return
+//                }
+//                let hash = try await TxSender.shared.send(tx: tx, userAddress: fromAddress)
+//                txHash = hash
+//            } catch { self.error = error.localizedDescription }
+//            isSending = false
 //        }
 //    }
     
@@ -295,7 +238,7 @@ final class SwapViewModel: ObservableObject {
                     }
                 }
             } catch {
-                print("Ошибка обновления балансов:", error)
+                print("Balance update error:", error)
             }
         }
     }
@@ -316,7 +259,7 @@ final class SwapViewModel: ObservableObject {
                 
                 await MainActor.run {
                     self.quote = q
-                    self.ignoreNextReceiveChange = true     // <— ВАЖНО
+                    self.ignoreNextReceiveChange = true
                     self.receiveText = NSDecimalNumber(decimal: out).stringValue
                 }
                 startQuoteAutoRefresh()
@@ -343,10 +286,9 @@ final class SwapViewModel: ObservableObject {
                 let usdc = usdcWei / pow10(6)
                 
                 await MainActor.run {
-                    self.ignoreNextPayChange = true         // <— ВАЖНО
+                    self.ignoreNextPayChange = true
                     self.payText = NSDecimalNumber(decimal: usdc).stringValue
                 }
-                // чтобы обновить и receive по прямому пути
                 self.requestQuoteForward(usdcAmount: usdc)
             } catch {
                 await MainActor.run { self.error = error.localizedDescription }
@@ -364,14 +306,13 @@ final class SwapViewModel: ObservableObject {
             
             while !Task.isCancelled {
                 // ... внутри while
-                try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)     // 5с показываем цифру
+                try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
                 if Task.isCancelled { break }
 
                 let (payAmount, isForward) = await MainActor.run {
                     (Decimal(string: self.payText) ?? 0, self.isUsdcToWeth)
                 }
 
-                // Включаем прогресс на ровно 2 секунды
                 await MainActor.run { self.isQuoteLoadingReceive = true }
 
                 let fetchTask = Task.detached { () -> (QuoteResponse?, Decimal?) in
@@ -460,7 +401,7 @@ final class SwapViewModel: ObservableObject {
             txArray: txHashes
         )
         history.append(entry)
-        self.successBanner = "✅ Транзакция(и) отправлены. Баланс обновится после подтверждений."
+        self.successBanner = "The transaction(s) have been sent. The balance will be updated after confirmations."
     }
 
 
@@ -495,7 +436,6 @@ final class SwapViewModel: ObservableObject {
             lastAmountWei = amountWei
 
             do {
-                // 1) Проверяем, нужен ли approve
                 let required = Decimal(string: amountWei) ?? 0
                 let allowanceStr = try await approveService.getAllowance(tokenAddress: Tokens.usdcNative,
                                                                          walletAddress: wallet)
@@ -503,7 +443,6 @@ final class SwapViewModel: ObservableObject {
                 let needsApprove = allowance < required
 
                 if needsApprove {
-                    // 2) Собираем и отправляем approve
                     let approveTx = try await approveService.buildApproveTx(
                         tokenAddress: Tokens.usdcNative,
                         amountWei: amountWei,
@@ -513,16 +452,14 @@ final class SwapViewModel: ObservableObject {
                         tx: approveTx.asOneInchSwapTx(),
                         userAddress: wallet
                     )
-                    // 3) Фиксируем состояние для второго шага
                     self.pendingAmountWei = amountWei
                     self.pendingIsUsdcToWeth = true
                     self.pendingHashes = [approveHash]
                     self.awaitingConfirmation = true
-                    self.successBanner = "✅ Approval отправлен. Нажми “Confirm transaction” для свапа."
+                    self.successBanner = "Approval has been sent. Click 'Confirm transaction' to swap."
                     return
                 }
 
-                // Approve не нужен → сразу второй шаг (одношаговый сценарий)
                 self.pendingAmountWei = amountWei
                 self.pendingIsUsdcToWeth = true
                 await MainActor.run { self.confirmSwap() }
@@ -571,11 +508,10 @@ final class SwapViewModel: ObservableObject {
                     self.pendingIsUsdcToWeth = false
                     self.pendingHashes = [approveHash]
                     self.awaitingConfirmation = true
-                    self.successBanner = "✅ Approval отправлен. Нажми “Confirm transaction” для свапа."
+                    self.successBanner = "Approval has been sent. Click 'Confirm transaction' to swap."
                     return
                 }
 
-                // Approve не нужен → сразу второй шаг
                 self.pendingAmountWei = amountWei
                 self.pendingIsUsdcToWeth = false
                 await MainActor.run { self.confirmSwap() }
@@ -586,7 +522,6 @@ final class SwapViewModel: ObservableObject {
         }
     }
 
-    // Шаг 2: SWAP — вызывается когда awaitingConfirmation == true ИЛИ approve не требовался.
     func confirmSwap() {
         stopQuoteAutoRefresh()
         Task {
@@ -606,7 +541,7 @@ final class SwapViewModel: ObservableObject {
             }
 
             do {
-                var txHashes = self.pendingHashes // тут уже может лежать approve
+                var txHashes = self.pendingHashes
                 let swapTx: OneInchSwapResponse
 
                 if isUSDCtoWETH {
@@ -626,16 +561,14 @@ final class SwapViewModel: ObservableObject {
                     return
                 }
 
-                // Отправляем сам swap
                 let swapHash = try await TxSender.shared.send(tx: tx, userAddress: wallet)
                 txHashes.append(swapHash)
 
                 await MainActor.run {
                     self.saveHistory(txHashes: txHashes)
-                    self.successBanner = "✅ Swap отправлен. Баланс обновится после подтверждения."
+                    self.successBanner = "The swap has been sent. The balance will be updated after confirmation."
                 }
 
-                // Ждём подтверждение свапа (approve ждать не обязаны)
                 try await waitForTransactionConfirmation(txHash: swapHash)
                 await MainActor.run { self.updateBalances() }
 
@@ -643,7 +576,6 @@ final class SwapViewModel: ObservableObject {
                 self.error = error.localizedDescription
             }
 
-            // Сброс контекста двухфазного процесса
             await MainActor.run {
                 self.awaitingConfirmation = false
                 self.pendingAmountWei = nil
@@ -682,28 +614,21 @@ final class SwapViewModel: ObservableObject {
                                                                             amountWei: amountWei,
                                                                             walletAddress: wallet)
                     _ = try await TxSender.shared.send(tx: approveTx.asOneInchSwapTx(), userAddress: wallet)
-                    // пользователь подтвердил и вернулся в приложение
                 }
 
-                // готовим swap-запрос
                 let swapTx = try await swapService.buildSwapTx_USDCtoWETH(amountWei: amountWei, fromAddress: wallet)
                 guard let tx = swapTx.tx else {
                     self.error = "1inch did not return a transaction. Try increasing the amount."
                     return
                 }
 
-                // отправляем запрос на swap...
                 let swapHashTask = Task { try await TxSender.shared.send(tx: tx, userAddress: wallet) }
 
-                // ...и если только что был approve — ПОДНИМАЕМ кошелёк сами
                 if needsApprove {
-                    try await Task.sleep(nanoseconds: 300_000_000) // 0.3s чтобы UI успел вернуться
+                    try await Task.sleep(nanoseconds: 300_000_000)
                     await MainActor.run {
                         print("вызван")
-                        // В Reown AppKit:
-                        AppKit.instance.launchCurrentWallet()        // или Router.openWallet() в старых версиях
-                        // Если своего метода нет — открой диплинк конкретного кошелька, напр.:
-                        // UIApplication.shared.open(URL(string: "metamask://")!)
+                        AppKit.instance.launchCurrentWallet()
                     }
                 } else {
                     print("не вызван")
@@ -765,10 +690,9 @@ final class SwapViewModel: ObservableObject {
                     return
                 }
 
-                // 🔑 как в USDC->WETH: запускаем отправку и поднимаем кошелёк
                 let swapHashTask = Task { try await TxSender.shared.send(tx: tx, userAddress: wallet) }
                 if needsApprove {
-                    try await Task.sleep(nanoseconds: 300_000_000) // 0.3s, чтобы UI вернулся
+                    try await Task.sleep(nanoseconds: 300_000_000)
                     await MainActor.run { AppKit.instance.launchCurrentWallet() }
                 }
 
@@ -809,7 +733,6 @@ final class SwapViewModel: ObservableObject {
                 ? (Tokens.usdcNative, 6, Tokens.weth, Tokens.wethDecimals)
                 : (Tokens.weth, Tokens.wethDecimals, Tokens.usdcNative, 6)
 
-                // approve (на весь totalAmount) заранее — чтобы не делать approve на каждую часть
                 do {
                     let totalWei = toWei(totalAmount, decimals: fromDecimals)
                     let required = Decimal(string: totalWei) ?? 0
@@ -818,15 +741,19 @@ final class SwapViewModel: ObservableObject {
                     if allowanceValue < required {
                         let approveTx = try await approveService.buildApproveTx(tokenAddress: fromToken, amountWei: totalWei, walletAddress: wallet)
                         let approveHash = try await TxSender.shared.send(tx: approveTx.asOneInchSwapTx(), userAddress: wallet)
-                        // логируем в список хэшей сразу, но не ждём
                         await MainActor.run {
                             self.split.hashes.append(approveHash)
-                            self.successBanner = "✅ Approval отправлен. Начинаем split…"
+                            self.successBanner = "The approval has been sent. Starting the split…"
                         }
                     }
                 }
 
-                // теперь отправляем сами части
+                await MainActor.run {
+                    self.split.current = 0
+                    self.split.total = parts
+                    self.split.progressText = "Confirmation 1\(parts)"
+                }
+
                 let hashes = try await splitService.executeSplitSwap(
                     fromToken: fromToken, fromDecimals: fromDecimals,
                     toToken: toToken, toDecimals: toDecimals,
@@ -835,18 +762,22 @@ final class SwapViewModel: ObservableObject {
                     progress: { done, total in
                         self.split.current = done
                         self.split.total = total
-                        self.split.progressText = "Part \(done)/\(total)…"
+
+                        if done < total {
+                            self.split.progressText = "Confirmation \(done + 1)/\(total)"
+                        } else {
+                            self.split.progressText = nil
+                        }
                     },
                     shouldCancel: { [weak self] in self?.splitCancel == true }
                 )
 
                 await MainActor.run {
                     self.split.hashes.append(contentsOf: hashes)
-                    self.successBanner = "✅ Отправлено \(hashes.count) транзакций split-swap."
+                    self.successBanner = "\(hashes.count) split-swap transactions sent"
                     self.saveHistory(txHashes: self.split.hashes)
                 }
 
-                // ждём подтверждение последнего, потом обновляем баланс (асинхронно)
                 if let last = hashes.last {
                     Task.detached { [weak self] in
                         do {
@@ -864,6 +795,7 @@ final class SwapViewModel: ObservableObject {
             await MainActor.run { self.split.isRunning = false }
         }
     }
+
 
 }
 

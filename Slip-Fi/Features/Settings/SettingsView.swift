@@ -13,7 +13,7 @@ struct SettingsView: View {
     @State private var addressCopied = false
     @State private var isAlertShown = false
     
-    private var accountAddress: String = UserDefaults.standard.string(forKey: "accountAddress") ?? "0x111111125421cA6dc452d289314280a0f8842A65"
+    private var accountAddress: String = UserDefaults.standard.string(forKey: "accountAddress") ?? "0x1C9e3253CF6629e692FcCE047e26E131CeAa3c08"
     
     var body: some View {
         ZStack {
