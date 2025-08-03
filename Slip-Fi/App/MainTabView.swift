@@ -8,8 +8,10 @@
 import SwiftUI
 
 struct MainTabView: View {
+    
     @State private var selectedTab: Tab = .home
-
+    @EnvironmentObject var session: SessionStore
+    
     var body: some View {
         contentView
             .safeAreaInset(edge: .bottom) {
@@ -25,16 +27,17 @@ struct MainTabView: View {
             .animation(.easeInOut(duration: 0.2), value: selectedTab)
             .ignoresSafeArea(.keyboard, edges: .bottom)
     }
-
+    
     @ViewBuilder
     private var contentView: some View {
         switch selectedTab {
-        case .home:
-            SwapView()
-        case .history:
-            HistoryView()
-        case .settings:
-            SettingsView()
+            case .home:
+                SwapView()
+            case .history:
+                HistoryView()
+            case .settings:
+                SettingsView()
+                    .environmentObject(session)
         }
     }
 }

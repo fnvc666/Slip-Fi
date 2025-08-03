@@ -13,9 +13,9 @@ import ReownAppKit
 final class SessionStore: ObservableObject {
     @Published var isConnected = false
     @Published var address: String?
-
+    
     private var bag = Set<AnyCancellable>()
-
+    
     init() {
         if let account = AppKit.instance.getAddress() {
             self.isConnected = true
@@ -31,7 +31,7 @@ final class SessionStore: ObservableObject {
                 self?.address = session.accounts.first?.address
             }
             .store(in: &bag)
-
+        
         // delete session
         AppKit.instance.sessionDeletePublisher
             .receive(on: DispatchQueue.main)
@@ -45,4 +45,23 @@ final class SessionStore: ObservableObject {
     func restoreSession() async {
         try! await AppKit.instance.connect(walletUniversalLink: "")
     }
+    
+    func disconnect() {
+        Task {
+            let sessions = AppKit.instance.getSessions()
+            
+            for session in sessions {
+                do {
+                    try await AppKit.instance.disconnect(topic: session.topic)
+                } catch {
+                    print("Failed to disconnect session: \(error)")
+                }
+            }
+            
+            UserDefaults.standard.removeObject(forKey: "accountAddress")
+            isConnected = false
+            address = nil
+        }
+    }
+
 }

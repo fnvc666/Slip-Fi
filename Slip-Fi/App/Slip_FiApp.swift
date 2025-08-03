@@ -45,6 +45,7 @@ struct Slip_FiApp: App {
         WindowGroup {
             if session.isConnected {
                 MainTabView()
+                    .environmentObject(session)
             } else {
                 ConnectView()
             }

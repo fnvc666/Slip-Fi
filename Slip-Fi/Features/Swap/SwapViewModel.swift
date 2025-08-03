@@ -220,12 +220,12 @@ final class SwapViewModel: ObservableObject {
             self.isLoading = true
             defer { self.isLoading = false }
             do {
-                let fromDecimals = 6
-                let toDecimals = 18
-                
+                let fromDecimals = (fromToken == Tokens.usdcNative) ? 6 : Tokens.wethDecimals
+                let toDecimals   = (toToken   == Tokens.usdcNative) ? 6 : Tokens.wethDecimals
+
                 let totalWeiStr = toBaseUnitsString(amount, decimals: fromDecimals)
                 var results: [SplitResult] = []
-                
+
                 for n in 1...maxParts {
                     let partWeiList = splitWei(totalWeiStr, parts: n)
                     var sumOutWei: Decimal = 0
@@ -239,13 +239,13 @@ final class SwapViewModel: ObservableObject {
                     let totalOut = sumOutWei / pow10(toDecimals)
                     results.append(.init(parts: n, totalToTokenAmount: totalOut, deltaVsOnePart: 0))
                 }
-                
+
                 if let base = results.first?.totalToTokenAmount {
                     for i in results.indices {
                         results[i].deltaVsOnePart = results[i].totalToTokenAmount - base
                     }
                 }
-                
+
                 let best = results.max(by: { $0.totalToTokenAmount < $1.totalToTokenAmount })
                 await MainActor.run {
                     self.split.results = results
@@ -257,6 +257,7 @@ final class SwapViewModel: ObservableObject {
             }
         }
     }
+
     
     func cancelSplit() { splitCancel = true }
     
@@ -555,33 +556,43 @@ final class SwapViewModel: ObservableObject {
             do {
                 var txHashes: [String] = []
 
-                // 1) approve WETH при необходимости
                 let required = Decimal(string: amountWei) ?? 0
-                var allowance = try await approveService.getAllowance(tokenAddress: Tokens.weth, walletAddress: wallet)
-                var allowanceValue = Decimal(string: allowance) ?? 0
+                let allowanceStr = try await approveService.getAllowance(tokenAddress: Tokens.weth,
+                                                                         walletAddress: wallet)
+                let allowance = Decimal(string: allowanceStr) ?? 0
+                let needsApprove = allowance < required
 
-                if allowanceValue < required {
-                    let approveTx = try await approveService.buildApproveTx(tokenAddress: Tokens.weth, amountWei: amountWei, walletAddress: wallet)
-                    let approveHash = try await TxSender.shared.send(tx: approveTx.asOneInchSwapTx(), userAddress: wallet)
+                if needsApprove {
+                    let approveTx = try await approveService.buildApproveTx(tokenAddress: Tokens.weth,
+                                                                            amountWei: amountWei,
+                                                                            walletAddress: wallet)
+                    let approveHash = try await TxSender.shared.send(tx: approveTx.asOneInchSwapTx(),
+                                                                     userAddress: wallet)
                     txHashes.append(approveHash)
                 }
 
-                // 2) сам свап WETH->USDC
-                let swapTx = try await swapService.buildSwapTx_WETHtoUSDC(amountWei: amountWei, fromAddress: wallet)
+                let swapTx = try await swapService.buildSwapTx_WETHtoUSDC(amountWei: amountWei,
+                                                                          fromAddress: wallet)
                 guard let tx = swapTx.tx else {
                     self.error = "1inch did not return a transaction. Try increasing the amount."
                     return
                 }
-                let swapHash = try await TxSender.shared.send(tx: tx, userAddress: wallet)
+
+                // 🔑 как в USDC->WETH: запускаем отправку и поднимаем кошелёк
+                let swapHashTask = Task { try await TxSender.shared.send(tx: tx, userAddress: wallet) }
+                if needsApprove {
+                    try await Task.sleep(nanoseconds: 300_000_000) // 0.3s, чтобы UI вернулся
+                    await MainActor.run { AppKit.instance.launchCurrentWallet() }
+                }
+
+                let swapHash = try await swapHashTask.value
                 txHashes.append(swapHash)
 
-                // 3) баннер + история сразу
                 await MainActor.run {
                     self.split.hashes = txHashes
                     self.saveHistory(txHashes: txHashes)
                 }
 
-                // 4) опционально ждём подтверждение последнего хэша -> обновляем баланс
                 try await waitForTransactionConfirmation(txHash: swapHash)
                 await MainActor.run { self.updateBalances() }
 
@@ -590,6 +601,7 @@ final class SwapViewModel: ObservableObject {
             }
         }
     }
+
 
     func startSplitSwap(totalAmount: Decimal, parts: Int, slippageBps: Int) {
         guard parts >= 1, totalAmount > 0 else { return }

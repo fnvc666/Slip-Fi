@@ -136,9 +136,7 @@ struct SwapView: View {
                         Button {
                             showSplitTable = true
                             let amt = Decimal(string: vm.payText) ?? 0
-                            vm.simulateSplitQuotes(from: vm.isUsdcToWeth ? Tokens.usdcNative : Tokens.weth,
-                                                   to:   vm.isUsdcToWeth ? Tokens.weth : Tokens.usdcNative,
-                                                   amount: amt, maxParts: 5)
+                            vm.simulateSplitQuotes(from: vm.isUsdcToWeth ? Tokens.usdcNative : Tokens.weth, to: vm.isUsdcToWeth ? Tokens.weth : Tokens.usdcNative, amount: amt, maxParts: 5)
                         } label: {
                             HStack {
                                 Spacer()
@@ -341,6 +339,7 @@ struct SplitResultRow: View {
     @ObservedObject var vm: SwapViewModel
     var result: SplitResult
     var body: some View {
+        let toSymbol = vm.isUsdcToWeth ? "WETH" : "USDC"
         HStack {
             Text("\(result.parts) split")
                 .font(.system(size: 12))
@@ -348,7 +347,7 @@ struct SplitResultRow: View {
             
             Spacer()
             
-            Text(String(format: "%.4f WETH",
+            Text(String(format: "%.4f \(toSymbol)",
                         NSDecimalNumber(decimal: result.totalToTokenAmount).doubleValue))
             .font(.system(size: 14))
             .foregroundStyle(Color(red: 0.04, green: 0.07, blue: 0.09))

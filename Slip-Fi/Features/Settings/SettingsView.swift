@@ -8,8 +8,13 @@
 import SwiftUI
 
 struct SettingsView: View {
-    private var accountAddress: String = UserDefaults.standard.string(forKey: "accountAddress") ?? "0x111111125421cA6dc452d289314280a0f8842A65"
+    
+    @EnvironmentObject var session: SessionStore
     @State private var addressCopied = false
+    @State private var isAlertShown = false
+    
+    private var accountAddress: String = UserDefaults.standard.string(forKey: "accountAddress") ?? "0x111111125421cA6dc452d289314280a0f8842A65"
+    
     var body: some View {
         ZStack {
             VStack {
@@ -33,6 +38,7 @@ struct SettingsView: View {
                             
                             Button {
                                 withAnimation {
+                                    UIPasteboard.general.string = accountAddress
                                     addressCopied = true
                                 }
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
@@ -53,7 +59,7 @@ struct SettingsView: View {
                             Spacer()
                             
                             Button {
-                                UIPasteboard.general.string = accountAddress
+                                session.disconnect()
                             } label: {
                                 Image(systemName: "wallet.bifold")
                                     .tint(.black)
