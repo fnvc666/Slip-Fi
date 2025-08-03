@@ -46,8 +46,14 @@ final class SwapViewModel: ObservableObject {
     @Published var wethBalanceUSD: Decimal = 0
     
     @Published var successBanner: String? = nil
+    @Published var awaitingConfirmation = false
     
     @Published var split = SplitState()
+    
+    private var pendingAmountWei: String? = nil
+    private var pendingIsUsdcToWeth: Bool? = nil
+    private var pendingHashes: [String] = []
+
     
     private var cancellables = Set<AnyCancellable>()
     private var isProgrammaticUpdate = false
@@ -459,13 +465,194 @@ final class SwapViewModel: ObservableObject {
 
 
     func executeSwap() {
+        if awaitingConfirmation {
+            confirmSwap()
+            return
+        }
+
         guard let amount = Decimal(string: payText), amount > 0 else { return }
         if isUsdcToWeth {
-            executeSwapUSDCtoWETH(amount: amount)
+            startApproveUSDCtoWETH(amount: amount)
         } else {
-            executeSwapWETHtoUSDC(amount: amount)
+            startApproveWETHtoUSDC(amount: amount)
         }
     }
+    
+    // Шаг 1: APPROVE USDC -> WETH
+    private func startApproveUSDCtoWETH(amount: Decimal) {
+        stopQuoteAutoRefresh()
+        Task {
+            guard !isLoading else { return }
+            isLoading = true
+            defer { isLoading = false }
+
+            guard let wallet = AppKit.instance.getAddress() else {
+                self.error = "Wallet not connected"
+                return
+            }
+
+            let amountWei = toWei(amount, decimals: 6)
+            lastAmountWei = amountWei
+
+            do {
+                // 1) Проверяем, нужен ли approve
+                let required = Decimal(string: amountWei) ?? 0
+                let allowanceStr = try await approveService.getAllowance(tokenAddress: Tokens.usdcNative,
+                                                                         walletAddress: wallet)
+                let allowance = Decimal(string: allowanceStr) ?? 0
+                let needsApprove = allowance < required
+
+                if needsApprove {
+                    // 2) Собираем и отправляем approve
+                    let approveTx = try await approveService.buildApproveTx(
+                        tokenAddress: Tokens.usdcNative,
+                        amountWei: amountWei,
+                        walletAddress: wallet
+                    )
+                    let approveHash = try await TxSender.shared.send(
+                        tx: approveTx.asOneInchSwapTx(),
+                        userAddress: wallet
+                    )
+                    // 3) Фиксируем состояние для второго шага
+                    self.pendingAmountWei = amountWei
+                    self.pendingIsUsdcToWeth = true
+                    self.pendingHashes = [approveHash]
+                    self.awaitingConfirmation = true
+                    self.successBanner = "✅ Approval отправлен. Нажми “Confirm transaction” для свапа."
+                    return
+                }
+
+                // Approve не нужен → сразу второй шаг (одношаговый сценарий)
+                self.pendingAmountWei = amountWei
+                self.pendingIsUsdcToWeth = true
+                await MainActor.run { self.confirmSwap() }
+
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    // Шаг 1: APPROVE WETH -> USDC
+    private func startApproveWETHtoUSDC(amount: Decimal) {
+        stopQuoteAutoRefresh()
+        Task {
+            guard !isLoading else { return }
+            isLoading = true
+            defer { isLoading = false }
+
+            guard let wallet = AppKit.instance.getAddress() else {
+                self.error = "Wallet not connected"
+                return
+            }
+
+            let amountWei = toWei(amount, decimals: Tokens.wethDecimals)
+            lastAmountWei = amountWei
+
+            do {
+                let required = Decimal(string: amountWei) ?? 0
+                let allowanceStr = try await approveService.getAllowance(tokenAddress: Tokens.weth,
+                                                                         walletAddress: wallet)
+                let allowance = Decimal(string: allowanceStr) ?? 0
+                let needsApprove = allowance < required
+
+                if needsApprove {
+                    let approveTx = try await approveService.buildApproveTx(
+                        tokenAddress: Tokens.weth,
+                        amountWei: amountWei,
+                        walletAddress: wallet
+                    )
+                    let approveHash = try await TxSender.shared.send(
+                        tx: approveTx.asOneInchSwapTx(),
+                        userAddress: wallet
+                    )
+
+                    self.pendingAmountWei = amountWei
+                    self.pendingIsUsdcToWeth = false
+                    self.pendingHashes = [approveHash]
+                    self.awaitingConfirmation = true
+                    self.successBanner = "✅ Approval отправлен. Нажми “Confirm transaction” для свапа."
+                    return
+                }
+
+                // Approve не нужен → сразу второй шаг
+                self.pendingAmountWei = amountWei
+                self.pendingIsUsdcToWeth = false
+                await MainActor.run { self.confirmSwap() }
+
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    // Шаг 2: SWAP — вызывается когда awaitingConfirmation == true ИЛИ approve не требовался.
+    func confirmSwap() {
+        stopQuoteAutoRefresh()
+        Task {
+            guard !isLoading else { return }
+            isLoading = true
+            defer { isLoading = false }
+
+            guard let wallet = AppKit.instance.getAddress() else {
+                self.error = "Wallet not connected"
+                return
+            }
+            guard let amountWei = self.pendingAmountWei,
+                  let isUSDCtoWETH = self.pendingIsUsdcToWeth else {
+                self.error = "No pending swap context. Start swap again."
+                self.awaitingConfirmation = false
+                return
+            }
+
+            do {
+                var txHashes = self.pendingHashes // тут уже может лежать approve
+                let swapTx: OneInchSwapResponse
+
+                if isUSDCtoWETH {
+                    swapTx = try await swapService.buildSwapTx_USDCtoWETH(
+                        amountWei: amountWei,
+                        fromAddress: wallet
+                    )
+                } else {
+                    swapTx = try await swapService.buildSwapTx_WETHtoUSDC(
+                        amountWei: amountWei,
+                        fromAddress: wallet
+                    )
+                }
+
+                guard let tx = swapTx.tx else {
+                    self.error = "1inch did not return a transaction. Try increasing the amount."
+                    return
+                }
+
+                // Отправляем сам swap
+                let swapHash = try await TxSender.shared.send(tx: tx, userAddress: wallet)
+                txHashes.append(swapHash)
+
+                await MainActor.run {
+                    self.saveHistory(txHashes: txHashes)
+                    self.successBanner = "✅ Swap отправлен. Баланс обновится после подтверждения."
+                }
+
+                // Ждём подтверждение свапа (approve ждать не обязаны)
+                try await waitForTransactionConfirmation(txHash: swapHash)
+                await MainActor.run { self.updateBalances() }
+
+            } catch {
+                self.error = error.localizedDescription
+            }
+
+            // Сброс контекста двухфазного процесса
+            await MainActor.run {
+                self.awaitingConfirmation = false
+                self.pendingAmountWei = nil
+                self.pendingIsUsdcToWeth = nil
+                self.pendingHashes = []
+            }
+        }
+    }
+
 
     // USDC -> WETH
     func executeSwapUSDCtoWETH(amount: Decimal) {

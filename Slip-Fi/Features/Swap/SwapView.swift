@@ -301,12 +301,15 @@ struct SplitStack: View {
                     Spacer()
                     
                     Button {
-                        vm.executeSwap()
+                        if vm.awaitingConfirmation {
+                            vm.executeSwap()
+                        } else {
+                            vm.executeSwap()
+                        }
                     } label: {
-                        Text("Swap without Split")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.white)
+                        Text(vm.awaitingConfirmation ? "Confirm Swap" : "Swap without Split")
                     }
+
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(.white.opacity(0.2))
